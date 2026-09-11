@@ -1,27 +1,42 @@
-import React, { useState, useMemo } from 'react';
+import { useRouter } from 'expo-router';
+import * as SecureStore from 'expo-secure-store';
+import { Bell, ChevronLeft, ChevronRight, X } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  View,
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Platform,
+  ScrollView,
+  StatusBar,
   Text,
   TouchableOpacity,
-  Modal,
-  ScrollView,
-  Image,
   useWindowDimensions,
-  StatusBar,
-  Platform
+  View
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Bell, ChevronLeft, ChevronRight, X } from 'lucide-react-native';
+
+// Firebase Imports
+import {
+  collection,
+  doc,
+  getDoc,
+  getDocs,
+  query,
+  setDoc,
+  where
+} from 'firebase/firestore';
+import { auth, db } from '../services/firebase'; // ปรับ Path ตามโครงสร้างไฟล์ของคุณ
 
 const THAI_MONTHS = [
   'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
   'กรกฎาคม', 'สิงหาคม', 'กันยายน', 'ตุลาคม', 'พฤศจิกายน', 'ธันวาคม'
 ];
 
-type AppointmentStatus = 'green' | 'red' | 'orange';
+export type AppointmentStatus = 'green' | 'red' | 'orange';
 
-interface AppointmentItem {
+export interface AppointmentItem {
   id: string;
   time: string;
   title: string;
@@ -30,56 +45,181 @@ interface AppointmentItem {
   avatars: string[];
 }
 
+export interface UserProfile {
+  id: string;
+  name: string;
+  avatar: string;
+}
+
 export default function IndexScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
 
-  const [currentMonth, setCurrentMonth] = useState(new Date(2026, 1, 1)); // กุมภาพันธ์ 2026
-  const [selectedDate, setSelectedDate] = useState('2026-2-14');
+  const currentUser = auth.currentUser;
 
-  // สถานะวันที่สำหรับแสดงจุดสี
-  const [dateStatuses, setDateStatuses] = useState<Record<string, AppointmentStatus>>({
-    '2026-2-1': 'red', '2026-2-2': 'green', '2026-2-3': 'orange',
-    '2026-2-4': 'green', '2026-2-5': 'red', '2026-2-6': 'green', '2026-2-7': 'green', '2026-2-8': 'orange', '2026-2-9': 'red', '2026-2-10': 'green',
-    '2026-2-11': 'green', '2026-2-12': 'orange', '2026-2-13': 'red', '2026-2-14': 'green', '2026-2-15': 'green', '2026-2-16': 'red', '2026-2-17': 'orange',
-    '2026-2-18': 'green', '2026-2-19': 'green', '2026-2-20': 'red', '2026-2-21': 'green', '2026-2-22': 'orange', '2026-2-23': 'red', '2026-2-24': 'green',
-    '2026-2-25': 'green', '2026-2-26': 'red', '2026-2-27': 'green', '2026-2-28': 'orange',
+  // User Profile State
+  const [userProfile, setUserProfile] = useState<UserProfile>({
+    id: currentUser?.uid || 'u1',
+    name: currentUser?.displayName || 'ผู้ใช้งาน',
+    avatar: currentUser?.photoURL || 'https://picsum.photos/seed/user1/100'
   });
 
-  // ข้อมูลนัดหมายจำลองสำหรับวันที่ 14 ก.พ.
-  const appointments: AppointmentItem[] = [
-    {
-      id: '1',
-      time: '18:30 น.',
-      title: 'ชาบูกับชาวแก๊งค์ 🍲',
-      location: 'ร้าน Shabu Baru (Siam Paragon)',
-      statusText: 'ว่างครบทุกคน (5/5)',
-      avatars: [
-        'https://picsum.photos/seed/p1/100',
-        'https://picsum.photos/seed/p2/100',
-        'https://picsum.photos/seed/p3/100',
-      ]
-    },
-    {
-      id: '2',
-      time: '20:30 น.',
-      title: 'ประชุมงานอ. ปิยะ',
-      location: 'ประชุมใน Zoom',
-      statusText: 'ว่างครบทุกคน (5/5)',
-      avatars: [
-        'https://picsum.photos/seed/p1/100',
-        'https://picsum.photos/seed/p2/100',
-        'https://picsum.photos/seed/p3/100',
-      ]
-    }
-  ];
+  // Calendar States
+  const today = new Date();
+  const [currentMonth, setCurrentMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(
+    `${today.getFullYear()}-${today.getMonth() + 1}-${today.getDate()}`
+  );
+  const [dateStatuses, setDateStatuses] = useState<Record<string, AppointmentStatus>>({});
+  
+  // Data & Loading States
+  const [appointments, setAppointments] = useState<AppointmentItem[]>([]);
+  const [isCalendarLoading, setIsCalendarLoading] = useState(false);
+  const [isAppointmentsLoading, setIsAppointmentsLoading] = useState(false);
+  const [isSavingStatus, setIsSavingStatus] = useState(false);
 
+  // Modal States
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<AppointmentStatus | null>(null);
 
   const horizontalPadding = 40;
   const dayCellWidth = (width - horizontalPadding) / 7;
+
+  // 1. โหลดข้อมูล Profile จาก SecureStore / Firestore
+  useEffect(() => {
+    const loadUserData = async () => {
+      try {
+        const savedUserInfo = await SecureStore.getItemAsync('userInfo');
+        if (savedUserInfo) {
+          const parsed = JSON.parse(savedUserInfo);
+          setUserProfile(prev => ({
+            ...prev,
+            name: parsed.name || prev.name,
+            avatar: parsed.avatar || prev.avatar,
+          }));
+        } else if (currentUser?.uid) {
+          const userDoc = await getDoc(doc(db, 'users', currentUser.uid));
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            setUserProfile({
+              id: currentUser.uid,
+              name: data.name || 'ผู้ใช้งาน',
+              avatar: data.avatar || 'https://picsum.photos/seed/user1/100'
+            });
+          }
+        }
+      } catch (e) {
+        console.log('Error loading user profile:', e);
+      }
+    };
+    loadUserData();
+  }, [currentUser]);
+
+  // 2. ดึงสถานะปฏิทินประจำเดือนจาก Firestore
+  const loadMonthStatuses = useCallback(async () => {
+    if (!currentUser?.uid) return;
+    setIsCalendarLoading(true);
+    try {
+      const year = currentMonth.getFullYear();
+      const month = currentMonth.getMonth() + 1;
+      
+      const userStatusesRef = collection(db, 'users', currentUser.uid, 'user_statuses');
+      const querySnapshot = await getDocs(userStatusesRef);
+      
+      const statusesMap: Record<string, AppointmentStatus> = {};
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        if (data.status) {
+          statusesMap[docSnap.id] = data.status;
+        }
+      });
+
+      setDateStatuses(statusesMap);
+    } catch (error) {
+      console.log('Error fetching statuses:', error);
+    } finally {
+      setIsCalendarLoading(false);
+    }
+  }, [currentMonth, currentUser]);
+
+  // 3. ดึงนัดหมายประจำวันจาก Firestore
+  const loadDailyAppointments = useCallback(async (dateStr: string) => {
+    if (!currentUser?.uid) return;
+    setIsAppointmentsLoading(true);
+    try {
+      const aptRef = collection(db, 'appointments');
+      const q = query(
+        aptRef, 
+        where('date', '==', dateStr),
+        where('members', 'array-contains', currentUser.uid)
+      );
+      
+      const querySnapshot = await getDocs(q);
+      const list: AppointmentItem[] = [];
+
+      querySnapshot.forEach((docSnap) => {
+        const data = docSnap.data();
+        list.push({
+          id: docSnap.id,
+          time: data.time || '18:00 น.',
+          title: data.title || 'นัดหมาย',
+          location: data.location || 'ไม่ระบุสถานที่',
+          statusText: data.statusText || 'สมาชิกพร้อม',
+          avatars: data.avatars || ['https://picsum.photos/seed/p1/100']
+        });
+      });
+
+      setAppointments(list);
+    } catch (error) {
+      console.log('Error fetching daily appointments:', error);
+    } finally {
+      setIsAppointmentsLoading(false);
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    loadMonthStatuses();
+  }, [loadMonthStatuses]);
+
+  useEffect(() => {
+    if (selectedDate) {
+      loadDailyAppointments(selectedDate);
+    }
+  }, [selectedDate, loadDailyAppointments]);
+
+  // 4. บันทึกสถานะวันว่างลง Firestore
+  const handleSaveStatus = async () => {
+    if (!currentUser?.uid) return;
+
+    const previousStatuses = { ...dateStatuses };
+    const newStatuses = { ...dateStatuses };
+    
+    if (selectedStatus) {
+      newStatuses[selectedDate] = selectedStatus;
+    } else {
+      delete newStatuses[selectedDate];
+    }
+
+    setDateStatuses(newStatuses);
+    setIsStatusModalOpen(false);
+
+    try {
+      setIsSavingStatus(true);
+      const statusDocRef = doc(db, 'users', currentUser.uid, 'user_statuses', selectedDate);
+      
+      await setDoc(statusDocRef, {
+        date: selectedDate,
+        status: selectedStatus,
+        updatedAt: new Date().toISOString()
+      });
+    } catch (error) {
+      setDateStatuses(previousStatuses);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกสถานะได้');
+    } finally {
+      setIsSavingStatus(false);
+    }
+  };
 
   const handlePrevMonth = () => {
     setCurrentMonth(prev => new Date(prev.getFullYear(), prev.getMonth() - 1, 1));
@@ -89,15 +229,10 @@ export default function IndexScreen() {
     setCurrentMonth(prev => new Date(prev.getFullYear(), prev.getMonth() + 1, 1));
   };
 
-  const handleSaveStatus = () => {
-    if (selectedStatus) {
-      setDateStatuses(prev => ({ ...prev, [selectedDate]: selectedStatus }));
-    } else {
-      const newStatuses = { ...dateStatuses };
-      delete newStatuses[selectedDate];
-      setDateStatuses(newStatuses);
-    }
-    setIsStatusModalOpen(false);
+  const handleOpenStatusModal = (fullDate: string) => {
+    setSelectedDate(fullDate);
+    setSelectedStatus(dateStatuses[fullDate] || null);
+    setIsStatusModalOpen(true);
   };
 
   const calendarDays = useMemo(() => {
@@ -123,7 +258,7 @@ export default function IndexScreen() {
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
 
       <ScrollView showsVerticalScrollIndicator={false} overScrollMode="never">
-        {/* Top Header สีเขียวทีล */}
+        {/* Top Header */}
         <View
           style={{
             backgroundColor: '#468f92',
@@ -137,16 +272,15 @@ export default function IndexScreen() {
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <Image
-                source={{ uri: 'https://picsum.photos/seed/user1/100' }}
+                source={{ uri: userProfile.avatar }}
                 style={{ width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: '#ffffff', marginRight: 10 }}
               />
               <View>
                 <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: '500' }}>Welcome back,</Text>
-                <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: 'bold' }}>คุณนภัส (บอส)</Text>
+                <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: 'bold' }}>{userProfile.name}</Text>
               </View>
             </View>
 
-            {/* ปุ่มกระดิ่ง เชื่อมโยงไปยังหน้า /notifications */}
             <TouchableOpacity
               onPress={() => router.push('/notifications')}
               style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center' }}
@@ -156,22 +290,27 @@ export default function IndexScreen() {
           </View>
         </View>
 
-        {/* Card ปฏิทินลอยซ้อน Header */}
+        {/* Card ปฏิทิน */}
         <View style={{ marginHorizontal: 16, marginTop: -24, backgroundColor: '#ffffff', borderRadius: 24, padding: 16, elevation: 3, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.08, shadowRadius: 8 }}>
-          {/* หัวปฏิทิน เลือกเดือน */}
+          {/* หัวปฏิทิน */}
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
             <TouchableOpacity onPress={handlePrevMonth} style={{ padding: 4 }}>
               <ChevronLeft color="#4a3b32" size={20} />
             </TouchableOpacity>
-            <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#4a3b32' }}>
-              {THAI_MONTHS[currentMonth.getMonth()]} {currentMonth.getFullYear()}
-            </Text>
+
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#4a3b32' }}>
+                {THAI_MONTHS[currentMonth.getMonth()]} {currentMonth.getFullYear()}
+              </Text>
+              {isCalendarLoading && <ActivityIndicator size="small" color="#468f92" />}
+            </View>
+
             <TouchableOpacity onPress={handleNextMonth} style={{ padding: 4 }}>
               <ChevronRight color="#4a3b32" size={20} />
             </TouchableOpacity>
           </View>
 
-          {/* ชื่อวัน ส. - อาท. */}
+          {/* ชื่อวัน */}
           <View style={{ flexDirection: 'row', marginBottom: 8 }}>
             {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map((day, i) => (
               <View key={i} style={{ width: dayCellWidth, alignItems: 'center' }}>
@@ -190,7 +329,8 @@ export default function IndexScreen() {
               <View key={i} style={{ width: dayCellWidth, height: 42, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 }}>
                 {d.fullDate ? (
                   <TouchableOpacity
-                    onPress={() => setSelectedDate(d.fullDate)}
+                    onPress={() => setSelectedDate(d.fullDate!)}
+                    onLongPress={() => handleOpenStatusModal(d.fullDate!)}
                     style={{ alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, backgroundColor: d.fullDate === selectedDate ? '#b5d5d0' : 'transparent' }}
                   >
                     <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#4a3b32' }}>
@@ -224,59 +364,63 @@ export default function IndexScreen() {
           </View>
         </View>
 
-        {/* ส่วนรายการนัดหมายประจำวัน */}
+        {/* รายการนัดหมายประจำวัน */}
         <View style={{ paddingHorizontal: 20, paddingTop: 20, paddingBottom: 24 }}>
           <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
             <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#374151' }}>
-              นัดหมายวันนี้ ({selectedDate ? `${selectedDate.split('-')[2]} ก.พ.` : '14 ก.พ.'})
+              นัดหมายวันที่ ({selectedDate ? `${selectedDate.split('-')[2]} ${THAI_MONTHS[parseInt(selectedDate.split('-')[1]) - 1]}` : ''})
             </Text>
             <TouchableOpacity onPress={() => router.push('/schedules')}>
               <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280' }}>ดูทั้งหมด</Text>
             </TouchableOpacity>
           </View>
 
-          {/* การ์ดรายการนัดหมาย - เพิ่ม TouchableOpacity ครอบการ์ดทั้งหมด */}
-          {appointments.map((item) => (
-            <TouchableOpacity
-              key={item.id}
-              onPress={() => router.push('/appointment-detail')}
-              activeOpacity={0.8}
-              style={{ flexDirection: 'row', marginBottom: 12, alignItems: 'center' }}
-            >
-              {/* กล่องเวลาฝั่งซ้าย */}
-              <View style={{ backgroundColor: '#ffffff', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 12, marginRight: 10, width: 90, alignItems: 'center', justifyContent: 'center', elevation: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151' }}>{item.time}</Text>
-              </View>
-
-              {/* รายละเอียดนัดหมายฝั่งขวา */}
-              <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 18, padding: 12, elevation: 1 }}>
-                <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 2 }}>{item.title}</Text>
-                <Text style={{ fontSize: 10, color: '#9ca3af', marginBottom: 8 }}>{item.location}</Text>
-
-                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                    {item.avatars.map((url, idx) => (
-                      <Image key={idx} source={{ uri: url }} style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#ffffff', marginLeft: idx === 0 ? 0 : -6 }} />
-                    ))}
-                    <View style={{ width: 22, height: 22, borderRadius: 11, backgroundColor: '#217371', alignItems: 'center', justifyContent: 'center', borderWidth: 1.5, borderColor: '#ffffff', marginLeft: -6 }}>
-                      <Text style={{ fontSize: 8, fontWeight: 'bold', color: '#ffffff' }}>+2</Text>
-                    </View>
-                  </View>
-                  <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#217371' }}>{item.statusText}</Text>
+          {isAppointmentsLoading ? (
+            <ActivityIndicator color="#468f92" style={{ marginVertical: 20 }} />
+          ) : appointments.length === 0 ? (
+            <View style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: 20, alignItems: 'center' }}>
+              <Text style={{ color: '#9ca3af', fontSize: 13 }}>ไม่มีนัดหมายในวันนี้</Text>
+            </View>
+          ) : (
+            appointments.map((item) => (
+              <TouchableOpacity
+                key={item.id}
+                onPress={() => router.push({ pathname: '/appointment-detail', params: { id: item.id } })}
+                activeOpacity={0.8}
+                style={{ flexDirection: 'row', marginBottom: 12, alignItems: 'center' }}
+              >
+                {/* กล่องเวลา */}
+                <View style={{ backgroundColor: '#ffffff', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 12, marginRight: 10, width: 90, alignItems: 'center', justifyContent: 'center', elevation: 1 }}>
+                  <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151' }}>{item.time}</Text>
                 </View>
-              </View>
-            </TouchableOpacity>
-          ))}
+
+                {/* รายละเอียดนัดหมาย */}
+                <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 18, padding: 12, elevation: 1 }}>
+                  <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 2 }}>{item.title}</Text>
+                  <Text style={{ fontSize: 10, color: '#9ca3af', marginBottom: 8 }}>{item.location}</Text>
+
+                  <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                      {item.avatars.map((url, idx) => (
+                        <Image key={idx} source={{ uri: url }} style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#ffffff', marginLeft: idx === 0 ? 0 : -6 }} />
+                      ))}
+                    </View>
+                    <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#217371' }}>{item.statusText}</Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ))
+          )}
         </View>
       </ScrollView>
 
-      {/* Modal สำหรับเลือกตั้งสถานะ */}
+      {/* Modal กำหนดสถานะ */}
       <Modal visible={isStatusModalOpen} transparent animationType="fade">
         <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
           <View style={{ backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 320 }}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
               <Text style={{ fontWeight: 'bold', color: '#1f2937', fontSize: 14 }}>
-                กำหนดสถานะ {selectedDate.split('-')[2]} ก.พ.
+                กำหนดสถานะ {selectedDate ? `${selectedDate.split('-')[2]} ${THAI_MONTHS[parseInt(selectedDate.split('-')[1]) - 1]}` : ''}
               </Text>
               <TouchableOpacity onPress={() => setIsStatusModalOpen(false)}>
                 <X color="#9ca3af" size={20} />
@@ -308,9 +452,14 @@ export default function IndexScreen() {
 
             <TouchableOpacity
               onPress={handleSaveStatus}
+              disabled={isSavingStatus}
               style={{ backgroundColor: '#468f92', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
             >
-              <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 12 }}>บันทึกสถานะ</Text>
+              {isSavingStatus ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 12 }}>บันทึกสถานะ</Text>
+              )}
             </TouchableOpacity>
           </View>
         </View>
