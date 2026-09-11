@@ -1,18 +1,24 @@
-import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  ScrollView, 
-  Image, 
-  StatusBar, 
-  Platform 
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { AlertCircle, ArrowLeft, Calendar, Check, Clock, MapPin, Share2, X } from 'lucide-react-native';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  ScrollView,
+  Share,
+  StatusBar,
+  Text,
+  TouchableOpacity,
+  View
 } from 'react-native';
-import { useRouter } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ArrowLeft, Share2, AlertCircle, Calendar, Clock, MapPin, Check, X } from 'lucide-react-native';
 
-interface Member {
+// ==========================================
+// 1. TYPES & INTERFACES FOR BACKEND
+// ==========================================
+export interface Member {
   id: string;
   name: string;
   avatar: string;
@@ -20,25 +26,158 @@ interface Member {
   statusText: string;
 }
 
+export interface AppointmentDetail {
+  id: string;
+  title: string;
+  organizerName: string;
+  organizerAvatar: string;
+  isVotingMode: boolean;
+  dateText?: string;
+  timeText?: string;
+  location: string;
+  hasTimeConflict?: boolean;
+  conflictDetailText?: string;
+  userResponse: 'accept' | 'reject' | null;
+  members: Member[];
+}
+
+export interface RespondAppointmentPayload {
+  appointmentId: string;
+  response: 'accept' | 'reject';
+}
+
+// ==========================================
+// 2. MOCK BACKEND API SERVICES
+// ==========================================
+const fetchAppointmentDetailApi = async (id: string): Promise<AppointmentDetail> => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve({
+        id,
+        title: 'ชาบูกับชาวแก๊งค์ 🍲',
+        organizerName: 'เจดน์',
+        organizerAvatar: 'https://picsum.photos/seed/m1/100',
+        isVotingMode: false,
+        dateText: 'วันเสาร์ที่ 21 กุมภาพันธ์ 2026',
+        timeText: '18:00 - 21:00 น.',
+        location: 'Shabu Baru, Siam Paragon ชั้น 4',
+        hasTimeConflict: true,
+        conflictDetailText: "ประชุมโปรเจกต์กลุ่ม (18:00 - 19:30 น.)",
+        userResponse: null,
+        members: [
+          { id: '1', name: 'เจดน์', avatar: 'https://picsum.photos/seed/m1/100', status: 'confirmed', statusText: 'ตอบรับแล้ว' },
+          { id: '2', name: 'มินท์', avatar: 'https://picsum.photos/seed/m2/100', status: 'confirmed', statusText: 'ตอบรับแล้ว' },
+          { id: '3', name: 'เป้', avatar: 'https://picsum.photos/seed/m3/100', status: 'pending', statusText: 'รอคำตอบ' },
+          { id: '4', name: 'ส้ม', avatar: 'https://picsum.photos/seed/m4/100', status: 'rejected', statusText: 'ปฏิเสธแล้ว' },
+        ],
+      });
+    }, 600);
+  });
+};
+
+const respondAppointmentApi = async (payload: RespondAppointmentPayload): Promise<{ success: boolean }> => {
+  return new Promise((resolve) => {
+    setTimeout(() => {
+      resolve({ success: true });
+    }, 800);
+  });
+};
+
 export default function AppointmentDetailScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams<{ id?: string }>();
   const insets = useSafeAreaInsets();
 
-  // ตัวเลือกสลับรูปแบบ Display (normal = นัดหมายปกติ, voting = แบบโหวตวันเวลา)
-  const [mode, setMode] = useState<'normal' | 'voting'>('normal');
-  const [userResponse, setUserResponse] = useState<'accept' | 'reject' | null>(null);
+  // Data & Loading States
+  const [appointment, setAppointment] = useState<AppointmentDetail | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isResponding, setIsResponding] = useState(false);
 
-  const members: Member[] = mode === 'normal' ? [
-    { id: '1', name: 'เจดน์', avatar: 'https://picsum.photos/seed/m1/100', status: 'confirmed', statusText: 'ตอบรับแล้ว' },
-    { id: '2', name: 'มินท์', avatar: 'https://picsum.photos/seed/m2/100', status: 'confirmed', statusText: 'ตอบรับแล้ว' },
-    { id: '3', name: 'เป้', avatar: 'https://picsum.photos/seed/m3/100', status: 'pending', statusText: 'รอคำตอบ' },
-    { id: '4', name: 'ส้ม', avatar: 'https://picsum.photos/seed/m4/100', status: 'rejected', statusText: 'ปฏิเสธแล้ว' },
-  ] : [
-    { id: '1', name: 'เจดน์', avatar: 'https://picsum.photos/seed/m1/100', status: 'voted', statusText: 'โหวตแล้ว' },
-    { id: '2', name: 'มินท์', avatar: 'https://picsum.photos/seed/m2/100', status: 'voted', statusText: 'โหวตแล้ว' },
-    { id: '3', name: 'เป้', avatar: 'https://picsum.photos/seed/m3/100', status: 'waiting', statusText: 'รอดำเนินการ' },
-    { id: '4', name: 'ส้ม', avatar: 'https://picsum.photos/seed/m4/100', status: 'waiting', statusText: 'รอดำเนินการ' },
-  ];
+  // ดึงรายละเอียดนัดหมายจาก Backend
+  const loadAppointmentDetail = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const appointmentId = params.id || '1';
+      const data = await fetchAppointmentDetailApi(appointmentId);
+      setAppointment(data);
+    } catch (error) {
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถโหลดข้อมูลนัดหมายได้');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [params.id]);
+
+  useEffect(() => {
+    loadAppointmentDetail();
+  }, [loadAppointmentDetail]);
+
+  // Handler ส่งการตอบรับ/ปฏิเสธ
+  const handleUserResponse = async (response: 'accept' | 'reject') => {
+    if (!appointment) return;
+
+    const previousResponse = appointment.userResponse;
+    
+    // Optimistic Update
+    setAppointment(prev => prev ? { ...prev, userResponse: response } : null);
+
+    try {
+      setIsResponding(true);
+      const res = await respondAppointmentApi({
+        appointmentId: appointment.id,
+        response,
+      });
+
+      if (!res.success) throw new Error();
+    } catch (error) {
+      // Rollback หาก API ล้มเหลว
+      setAppointment(prev => prev ? { ...prev, userResponse: previousResponse } : null);
+      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถส่งคำตอบได้ กรุณาลองใหม่อีกครั้ง');
+    } finally {
+      setIsResponding(false);
+    }
+  };
+
+  // Handler สลับโหมดทดสอบ (Normal <-> Vote)
+  const toggleMode = () => {
+    if (!appointment) return;
+    const isVoting = !appointment.isVotingMode;
+    setAppointment({
+      ...appointment,
+      isVotingMode: isVoting,
+      title: isVoting ? 'นัดเที่ยวทะเลพัทยา 🏖️' : 'ชาบูกับชาวแก๊งค์ 🍲',
+      members: isVoting ? [
+        { id: '1', name: 'เจดน์', avatar: 'https://picsum.photos/seed/m1/100', status: 'voted', statusText: 'โหวตแล้ว' },
+        { id: '2', name: 'มินท์', avatar: 'https://picsum.photos/seed/m2/100', status: 'voted', statusText: 'โหวตแล้ว' },
+        { id: '3', name: 'เป้', avatar: 'https://picsum.photos/seed/m3/100', status: 'waiting', statusText: 'รอดำเนินการ' },
+        { id: '4', name: 'ส้ม', avatar: 'https://picsum.photos/seed/m4/100', status: 'waiting', statusText: 'รอดำเนินการ' },
+      ] : [
+        { id: '1', name: 'เจดน์', avatar: 'https://picsum.photos/seed/m1/100', status: 'confirmed', statusText: 'ตอบรับแล้ว' },
+        { id: '2', name: 'มินท์', avatar: 'https://picsum.photos/seed/m2/100', status: 'confirmed', statusText: 'ตอบรับแล้ว' },
+        { id: '3', name: 'เป้', avatar: 'https://picsum.photos/seed/m3/100', status: 'pending', statusText: 'รอคำตอบ' },
+        { id: '4', name: 'ส้ม', avatar: 'https://picsum.photos/seed/m4/100', status: 'rejected', statusText: 'ปฏิเสธแล้ว' },
+      ]
+    });
+  };
+
+  // แชร์นัดหมาย
+  const handleShare = async () => {
+    if (!appointment) return;
+    try {
+      await Share.share({
+        message: `นัดหมาย: ${appointment.title}\nสถานที่: ${appointment.location}`,
+      });
+    } catch (error) {
+      console.log(error);
+    }
+  };
+
+  if (isLoading || !appointment) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#cce1de', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#468f92" />
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1, backgroundColor: '#cce1de' }}>
@@ -53,7 +192,7 @@ export default function AppointmentDetailScreen() {
           paddingBottom: 16,
           flexDirection: 'row',
           alignItems: 'center',
-          justify: 'space-between'
+          justifyContent: 'space-between'
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
@@ -65,19 +204,19 @@ export default function AppointmentDetailScreen() {
           </Text>
         </View>
 
-        <TouchableOpacity style={{ padding: 4 }}>
+        <TouchableOpacity onPress={handleShare} style={{ padding: 4 }}>
           <Share2 color="#ffffff" size={20} />
         </TouchableOpacity>
       </View>
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
         
-        {/* Banner เตือนเวลาชนกัน (แสดงเฉพาะแบบปกติ) */}
-        {mode === 'normal' && (
+        {/* Banner เตือนเวลาชนกัน */}
+        {!appointment.isVotingMode && appointment.hasTimeConflict && (
           <View style={{ backgroundColor: '#fbe3e3', borderWidth: 1, borderColor: '#f87171', borderRadius: 12, paddingVertical: 8, paddingHorizontal: 12, flexDirection: 'row', alignItems: 'center', marginBottom: 12 }}>
             <AlertCircle color="#ef4444" size={16} style={{ marginRight: 8 }} />
             <Text style={{ fontSize: 11, color: '#ef4444', fontWeight: 'bold', flex: 1 }}>
-              เวลาชนกับนัดอื่น: 'ประชุมโปรเจกต์กลุ่ม' (18:00 - 19:30 น.)
+              เวลาชนกับนัดอื่น: '{appointment.conflictDetailText}'
             </Text>
           </View>
         )}
@@ -87,27 +226,27 @@ export default function AppointmentDetailScreen() {
           
           {/* จัดโดย... */}
           <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 10 }}>
-            <Image source={{ uri: 'https://picsum.photos/seed/m1/100' }} style={{ width: 22, height: 22, borderRadius: 11, marginRight: 6 }} />
+            <Image source={{ uri: appointment.organizerAvatar }} style={{ width: 22, height: 22, borderRadius: 11, marginRight: 6 }} />
             <Text style={{ fontSize: 11, color: '#9ca3af' }}>ผู้จัดงาน: </Text>
-            <Text style={{ fontSize: 11, color: '#468f92', fontWeight: 'bold' }}>เจดน์</Text>
+            <Text style={{ fontSize: 11, color: '#468f92', fontWeight: 'bold' }}>{appointment.organizerName}</Text>
           </View>
 
           {/* ชื่อกิจกรรม */}
           <Text style={{ fontSize: 17, fontWeight: 'bold', color: '#1f2937', marginBottom: 10 }}>
-            {mode === 'normal' ? 'ประชุม' : 'นัดเที่ยวทะเลพัทยา 🏖️'}
+            {appointment.title}
           </Text>
 
           {/* วัน เวลา สถานที่ */}
           <View style={{ marginBottom: 12 }}>
-            {mode === 'normal' && (
+            {!appointment.isVotingMode && (
               <>
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
                   <Calendar color="#468f92" size={15} style={{ marginRight: 8 }} />
-                  <Text style={{ fontSize: 12, color: '#4b5563' }}>วันเสาร์ที่ 21 กุมภาพันธ์ 2026</Text>
+                  <Text style={{ fontSize: 12, color: '#4b5563' }}>{appointment.dateText}</Text>
                 </View>
                 <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 6 }}>
                   <Clock color="#468f92" size={15} style={{ marginRight: 8 }} />
-                  <Text style={{ fontSize: 12, color: '#4b5563' }}>18:00 - 21:00 น.</Text>
+                  <Text style={{ fontSize: 12, color: '#4b5563' }}>{appointment.timeText}</Text>
                 </View>
               </>
             )}
@@ -115,7 +254,7 @@ export default function AppointmentDetailScreen() {
             <View style={{ flexDirection: 'row', alignItems: 'center' }}>
               <MapPin color="#468f92" size={15} style={{ marginRight: 8 }} />
               <Text style={{ fontSize: 12, color: '#4b5563', flex: 1 }}>
-                Shabu Baru, Siam Paragon ชั้น 4
+                {appointment.location}
               </Text>
             </View>
           </View>
@@ -125,12 +264,12 @@ export default function AppointmentDetailScreen() {
             <View style={{ width: 32, height: 32, borderRadius: 16, backgroundColor: '#468f92', alignItems: 'center', justifyContent: 'center', borderWidth: 2, borderColor: '#ffffff' }}>
               <MapPin color="#ffffff" size={18} />
             </View>
-            <Text style={{ fontSize: 10, color: '#ffffff', fontWeight: 'bold', marginTop: 4 }}>ร้าน Shabu Baru</Text>
+            <Text style={{ fontSize: 10, color: '#ffffff', fontWeight: 'bold', marginTop: 4 }}>{appointment.location}</Text>
           </View>
         </View>
 
         {/* ส่วนการตอบรับคำเชิญ / การโหวต */}
-        {mode === 'normal' ? (
+        {!appointment.isVotingMode ? (
           <View style={{ marginBottom: 20 }}>
             <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 10 }}>
               ตอบรับคำเชิญของคุณ
@@ -139,8 +278,9 @@ export default function AppointmentDetailScreen() {
             <View style={{ flexDirection: 'row', gap: 10 }}>
               {/* ปุ่มตอบรับ */}
               <TouchableOpacity 
-                onPress={() => setUserResponse('accept')}
-                style={{ flex: 1, backgroundColor: userResponse === 'accept' ? '#22c55e' : '#4ade80', borderRadius: 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+                onPress={() => handleUserResponse('accept')}
+                disabled={isResponding}
+                style={{ flex: 1, backgroundColor: appointment.userResponse === 'accept' ? '#22c55e' : '#4ade80', borderRadius: 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
               >
                 <Check color="#ffffff" size={16} style={{ marginRight: 6 }} />
                 <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 13 }}>ตอบรับ</Text>
@@ -148,8 +288,9 @@ export default function AppointmentDetailScreen() {
 
               {/* ปุ่มปฏิเสธ */}
               <TouchableOpacity 
-                onPress={() => setUserResponse('reject')}
-                style={{ flex: 1, backgroundColor: userResponse === 'reject' ? '#dc2626' : '#f87171', borderRadius: 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
+                onPress={() => handleUserResponse('reject')}
+                disabled={isResponding}
+                style={{ flex: 1, backgroundColor: appointment.userResponse === 'reject' ? '#dc2626' : '#f87171', borderRadius: 12, paddingVertical: 12, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' }}
               >
                 <X color="#ffffff" size={16} style={{ marginRight: 6 }} />
                 <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 13 }}>ปฏิเสธ</Text>
@@ -161,7 +302,10 @@ export default function AppointmentDetailScreen() {
             <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 10 }}>
               โหวตวัน และเวลา
             </Text>
-            <TouchableOpacity style={{ backgroundColor: '#217371', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }}>
+            <TouchableOpacity 
+              onPress={() => router.push({ pathname: '/vote-appointment', params: { id: appointment.id } })}
+              style={{ backgroundColor: '#217371', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }}
+            >
               <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>โหวตเลย</Text>
             </TouchableOpacity>
           </View>
@@ -170,19 +314,19 @@ export default function AppointmentDetailScreen() {
         {/* รายชื่อเพื่อนและสถานะ */}
         <View>
           <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 12 }}>
-            รายชื่อเพื่อนและสถานะ ({members.length} คน)
+            รายชื่อเพื่อนและสถานะ ({appointment.members.length} คน)
           </Text>
 
           <View style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: 12 }}>
-            {members.map((m, idx) => (
+            {appointment.members.map((m, idx) => (
               <View 
                 key={m.id}
                 style={{ 
                   flexDirection: 'row', 
                   alignItems: 'center', 
-                  justify: 'space-between', 
+                  justifyContent: 'space-between', 
                   paddingVertical: 10,
-                  borderBottomWidth: idx === members.length - 1 ? 0 : 1,
+                  borderBottomWidth: idx === appointment.members.length - 1 ? 0 : 1,
                   borderColor: '#f3f4f6'
                 }}
               >
@@ -223,11 +367,11 @@ export default function AppointmentDetailScreen() {
 
         {/* ปุ่มสลับโหมดทดสอบ (Normal <-> Vote) */}
         <TouchableOpacity 
-          onPress={() => setMode(mode === 'normal' ? 'voting' : 'normal')}
+          onPress={toggleMode}
           style={{ marginTop: 24, padding: 10, alignItems: 'center' }}
         >
           <Text style={{ fontSize: 11, color: '#468f92', textDecorationLine: 'underline' }}>
-            [สลับมุมมองไปแบบ{mode === 'normal' ? 'โหวตวันเวลา' : 'นัดหมายปกติ'}]
+            [สลับมุมมองไปแบบ{appointment.isVotingMode ? 'นัดหมายปกติ' : 'โหวตวันเวลา'}]
           </Text>
         </TouchableOpacity>
 

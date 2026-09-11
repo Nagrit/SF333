@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "641198856800",
+    "project_id": "sf333-9f8c2",
+    "storage_bucket": "sf333-9f8c2.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:641198856800:android:e3dc15c713dde57bf4c105",
+        "android_client_info": {
+          "package_name": "com.sf333.calendarsf333"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "641198856800-j4kuvvoshdnto1e48e44u6oangr6jepp.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDAnsRjnWql1ZqpTpwGfrh1a0P8BGoAvr8"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "641198856800-j4kuvvoshdnto1e48e44u6oangr6jepp.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
