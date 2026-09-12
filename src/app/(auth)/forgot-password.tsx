@@ -2,19 +2,23 @@ import { useRouter } from 'expo-router';
 import { Mail } from 'lucide-react-native';
 import { useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Platform,
-    ScrollView,
-    StatusBar,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+
+// Firebase Auth Imports
+import { sendPasswordResetEmail } from 'firebase/auth';
+import { auth } from '../../services/firebase';
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
@@ -23,21 +27,38 @@ export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  const handleResetPassword = () => {
-    if (!email.trim()) {
+  // ส่งลิงก์รีเซ็ตรหัสผ่านผ่าน Firebase Auth
+  const handleResetPassword = async () => {
+    const cleanEmail = email.trim();
+
+    if (!cleanEmail) {
       Alert.alert('Error', 'Please enter your Email address');
       return;
     }
 
     setIsLoading(true);
-    setTimeout(() => {
-      setIsLoading(false);
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
       Alert.alert(
         'Email Sent', 
         'Password restore link has been sent to your email.',
         [{ text: 'OK', onPress: () => router.push('/login') }]
       );
-    }, 1000);
+    } catch (error: any) {
+      let errorMessage = 'Failed to send password reset email.';
+      
+      if (error.code === 'auth/user-not-found') {
+        errorMessage = 'No account found with this email address.';
+      } else if (error.code === 'auth/invalid-email') {
+        errorMessage = 'Invalid email address format.';
+      } else if (error.code === 'auth/too-many-requests') {
+        errorMessage = 'Too many requests. Please try again later.';
+      }
+
+      Alert.alert('Reset Failed', errorMessage);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   return (
