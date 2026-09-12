@@ -1,3 +1,4 @@
+import * as Clipboard from 'expo-clipboard';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
@@ -6,6 +7,7 @@ import {
   Camera,
   ChevronRight,
   CircleHelp,
+  Copy,
   HelpCircle,
   Lock,
   LogOut,
@@ -33,13 +35,15 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Firebase Imports
 import { updateProfile } from 'firebase/auth';
-import { doc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../services/firebase';
+import { doc, getDoc, updateDoc } from 'firebase/firestore';
+import { auth, db } from '../../services/firebase';
 
 export interface UserProfileData {
   id: string;
   name: string;
+  username: string;
   email: string;
+  friendCode: string;
   avatar: string;
 }
 
@@ -55,7 +59,6 @@ export default function ProfileScreen() {
   // Modal State
   const [activeModal, setActiveModal] = useState<'1' | '2' | '3' | '4' | null>(null);
 
-  // Form States
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
 
@@ -68,29 +71,41 @@ export default function ProfileScreen() {
     const loadProfile = async () => {
       try {
         setIsLoading(true);
-        const savedUserInfo = await SecureStore.getItemAsync('userInfo');
-        if (savedUserInfo) {
-          const parsedUser = JSON.parse(savedUserInfo);
-          const loadedProfile = {
-            id: currentUser?.uid || 'usr_01',
-            name: parsedUser.name || currentUser?.displayName || 'ผู้ใช้งาน',
-            email: parsedUser.email || currentUser?.email || 'user@example.com',
-            avatar: parsedUser.avatar || currentUser?.photoURL || 'https://picsum.photos/seed/user1/200',
-          };
-          setProfile(loadedProfile);
-          setEditName(loadedProfile.name);
-          setEditEmail(loadedProfile.email);
-        } else {
-          const defaultProfile = {
-            id: currentUser?.uid || 'usr_01',
-            name: currentUser?.displayName || 'คุณนภัส (บอส)',
-            email: currentUser?.email || 'naphat.boss@example.com',
-            avatar: currentUser?.photoURL || 'https://picsum.photos/seed/user1/200',
-          };
-          setProfile(defaultProfile);
-          setEditName(defaultProfile.name);
-          setEditEmail(defaultProfile.email);
+
+        let fetchedUsername = '';
+        let fetchedFriendCode = 'FC-XXXXXX';
+        let fetchedAvatar = '';
+        let fetchedName = '';
+        let fetchedEmail = '';
+
+        if (currentUser) {
+          const userDocRef = doc(db, 'users', currentUser.uid);
+          const userDoc = await getDoc(userDocRef);
+          if (userDoc.exists()) {
+            const data = userDoc.data();
+            fetchedUsername = data.username || '';
+            fetchedFriendCode = data.friendCode || 'FC-XXXXXX';
+            fetchedAvatar = data.avatar || '';
+            fetchedName = data.name || '';
+            fetchedEmail = data.email || '';
+          }
         }
+
+        const savedUserInfo = await SecureStore.getItemAsync('userInfo');
+        const parsedUser = savedUserInfo ? JSON.parse(savedUserInfo) : {};
+
+        const loadedProfile = {
+          id: currentUser?.uid || 'usr_01',
+          name: fetchedName || parsedUser.name || currentUser?.displayName || 'ผู้ใช้งาน',
+          username: fetchedUsername || parsedUser.username || 'user',
+          email: fetchedEmail || parsedUser.email || currentUser?.email || 'user@example.com',
+          friendCode: fetchedFriendCode,
+          avatar: currentUser?.photoURL || fetchedAvatar || parsedUser.avatar || `https://picsum.photos/seed/${currentUser?.uid || 'user1'}/200`,
+        };
+
+        setProfile(loadedProfile);
+        setEditName(loadedProfile.name);
+        setEditEmail(loadedProfile.email);
       } catch (error) {
         Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถดึงข้อมูลโปรไฟล์ได้');
       } finally {
@@ -101,7 +116,12 @@ export default function ProfileScreen() {
     loadProfile();
   }, [currentUser]);
 
-  // ฟังก์ชันเลือกรูปและอัปเดตรูปโปรไฟล์
+  // ฟังก์ชันคัดลอกรหัสเพื่อนเข้า Clipboard
+  const handleCopyFriendCode = async (code: string) => {
+    await Clipboard.setStringAsync(code);
+    Alert.alert('คัดลอกแล้ว', `คัดลอกรหัส ${code} ไปยังคลิปบอร์ดเรียบร้อยแล้ว`);
+  };
+
   const handlePickImage = async () => {
     const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
 
@@ -122,27 +142,33 @@ export default function ProfileScreen() {
       setIsUpdatingAvatar(true);
 
       try {
-        // 1. อัปเดต State ในหน้าจอ
         if (profile) {
           const updated = { ...profile, avatar: newAvatarUri };
           setProfile(updated);
 
-          // 2. บันทึกลง SecureStore
+          // บันทึกลง SecureStore
           await SecureStore.setItemAsync('userInfo', JSON.stringify({
             name: updated.name,
+            username: updated.username,
             email: updated.email,
+            friendCode: updated.friendCode,
             avatar: newAvatarUri
           }));
         }
 
-        // 3. อัปเดตลง Firebase Auth & Firestore (ถ้าผู้ใช้ล็อกอินอยู่)
         if (currentUser) {
+          // อัปเดตใน Firebase Auth
           await updateProfile(currentUser, { photoURL: newAvatarUri });
-          await updateDoc(doc(db, 'users', currentUser.uid), { avatar: newAvatarUri });
+
+          // 🔥 บันทึกลงใน Firestore collection 'users' เพื่อให้เพื่อนและทุกคนในกลุ่มดึงไปแสดงผลได้
+          await updateDoc(doc(db, 'users', currentUser.uid), {
+            avatar: newAvatarUri
+          });
         }
 
-        Alert.alert('สำเร็จ', 'เปลี่ยนรูปโปรไฟล์เรียบร้อยแล้ว');
+        Alert.alert('สำเร็จ', 'บันทึกรูปโปรไฟล์เรียบร้อยแล้ว');
       } catch (error) {
+        console.log('Error updating avatar:', error);
         Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถอัปเดตรูปโปรไฟล์ได้');
       } finally {
         setIsUpdatingAvatar(false);
@@ -153,16 +179,24 @@ export default function ProfileScreen() {
   const handleSaveProfile = async () => {
     if (!profile) return;
     try {
-      const updatedProfile = { ...profile, name: editName, email: editEmail };
+      const updatedProfile = {
+        ...profile,
+        name: editName,
+        email: editEmail
+      };
       setProfile(updatedProfile);
+
       await SecureStore.setItemAsync('userInfo', JSON.stringify({
         name: editName,
+        username: profile.username,
         email: editEmail,
+        friendCode: profile.friendCode,
         avatar: profile.avatar
       }));
 
       if (currentUser) {
         await updateProfile(currentUser, { displayName: editName });
+        // บันทึกลง Firestore ด้วยเช่นกัน
         await updateDoc(doc(db, 'users', currentUser.uid), {
           name: editName,
           email: editEmail
@@ -218,13 +252,18 @@ export default function ProfileScreen() {
             <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 16 }}>แก้ไขข้อมูลส่วนตัว</Text>
 
             <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 6 }}>ชื่อ - นามสกุล</Text>
-            <View style={{ backgroundColor: '#f3f4f6', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 16 }}>
+            <View style={{ backgroundColor: '#f3f4f6', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 12 }}>
               <TextInput
                 value={editName}
                 onChangeText={setEditName}
                 placeholder="ระบุชื่อของคุณ"
                 style={{ fontSize: 14, color: '#374151' }}
               />
+            </View>
+
+            <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 6 }}>Username (ไม่สามารถเปลี่ยนได้)</Text>
+            <View style={{ backgroundColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 12 }}>
+              <Text style={{ fontSize: 14, color: '#9ca3af' }}>@{profile.username}</Text>
             </View>
 
             <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 6 }}>อีเมล</Text>
@@ -396,8 +435,21 @@ export default function ProfileScreen() {
             </TouchableOpacity>
           </View>
 
-          <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 2 }}>{profile.name}</Text>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12 }}>{profile.email}</Text>
+          {/* ชื่อจริง และ Username ในวงเล็บ */}
+          <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 2, textAlign: 'center' }}>
+            {profile.name} <Text style={{ fontWeight: 'normal', fontSize: 15, color: 'rgba(255,255,255,0.9)' }}>(@{profile.username})</Text>
+          </Text>
+          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12, marginBottom: 10 }}>{profile.email}</Text>
+
+          {/* Friend Code Badge สำหรับระบบเพิ่มเพื่อน (กด Copy ได้จริง) */}
+          <TouchableOpacity
+            onPress={() => handleCopyFriendCode(profile.friendCode)}
+            activeOpacity={0.7}
+            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(28, 78, 78, 0.4)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, gap: 6 }}
+          >
+            <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '600' }}>รหัสเพื่อน: {profile.friendCode}</Text>
+            <Copy size={13} color="#ffffff" />
+          </TouchableOpacity>
         </View>
 
         {/* Menu List */}
