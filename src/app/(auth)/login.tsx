@@ -20,15 +20,15 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 // Firebase & Google Sign-In Imports
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import { GoogleAuthProvider, signInWithCredential, signInWithEmailAndPassword } from 'firebase/auth';
-import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
+// import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 import { auth, db } from '../../services/firebase';
 
 // ⚙️ กำหนดค่า Web Client ID ของ Google (ต้องตรงกับหน้า Register)
-GoogleSignin.configure({
-  webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
-});
+// GoogleSignin.configure({
+//   webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com',
+// });
 
 export default function LoginScreen() {
   const router = useRouter();
@@ -93,60 +93,60 @@ export default function LoginScreen() {
   };
 
   // 🚀 ฟังก์ชันเข้าสู่ระบบด้วย Google
-  const handleGoogleLogin = async () => {
-    try {
-      setIsGoogleLoading(true);
-      await GoogleSignin.hasPlayServices();
-      const userInfo = await GoogleSignin.signIn();
-      const idToken = userInfo.data?.idToken;
+  // const handleGoogleLogin = async () => {
+  //   try {
+  //     setIsGoogleLoading(true);
+  //     await GoogleSignin.hasPlayServices();
+  //     const userInfo = await GoogleSignin.signIn();
+  //     const idToken = userInfo.data?.idToken;
 
-      if (!idToken) {
-        throw new Error('ไม่สามารถดึงข้อมูล Token จาก Google ได้');
-      }
+  //     if (!idToken) {
+  //       throw new Error('ไม่สามารถดึงข้อมูล Token จาก Google ได้');
+  //     }
 
-      const credential = GoogleAuthProvider.credential(idToken);
-      const userCredential = await signInWithCredential(auth, credential);
-      const user = userCredential.user;
-      const userToken = await user.getIdToken();
+  //     const credential = GoogleAuthProvider.credential(idToken);
+  //     const userCredential = await signInWithCredential(auth, credential);
+  //     const user = userCredential.user;
+  //     const userToken = await user.getIdToken();
 
-      // บันทึก Token ลง SecureStore
-      await SecureStore.setItemAsync('userToken', userToken);
-      await SecureStore.setItemAsync('userInfo', JSON.stringify({
-        name: user.displayName || 'Google User',
-        email: user.email,
-        avatar: user.photoURL || `https://picsum.photos/seed/${user.uid}/200`
-      }));
+  //     // บันทึก Token ลง SecureStore
+  //     await SecureStore.setItemAsync('userToken', userToken);
+  //     await SecureStore.setItemAsync('userInfo', JSON.stringify({
+  //       name: user.displayName || 'Google User',
+  //       email: user.email,
+  //       avatar: user.photoURL || `https://picsum.photos/seed/${user.uid}/200`
+  //     }));
 
-      // ตรวจสอบข้อมูลใน Firestore ว่าเคยบันทึกไว้หรือยัง
-      const userDocRef = doc(db, 'users', user.uid);
-      const userDocSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', user.uid)));
+  //     // ตรวจสอบข้อมูลใน Firestore ว่าเคยบันทึกไว้หรือยัง
+  //     const userDocRef = doc(db, 'users', user.uid);
+  //     const userDocSnap = await getDocs(query(collection(db, 'users'), where('uid', '==', user.uid)));
 
-      if (userDocSnap.empty) {
-        const uniqueFriendCode = await getUniqueFriendCode();
-        const generatedUsername = user.email ? user.email.split('@')[0].toLowerCase() : `user_${user.uid.slice(0, 5)}`;
+  //     if (userDocSnap.empty) {
+  //       const uniqueFriendCode = await getUniqueFriendCode();
+  //       const generatedUsername = user.email ? user.email.split('@')[0].toLowerCase() : `user_${user.uid.slice(0, 5)}`;
 
-        await setDoc(userDocRef, {
-          uid: user.uid,
-          name: user.displayName || 'Google User',
-          username: generatedUsername,
-          email: user.email || '',
-          friendCode: uniqueFriendCode,
-          avatar: user.photoURL || `https://picsum.photos/seed/${user.uid}/200`,
-          createdAt: new Date().toISOString(),
-          totalGroups: 0,
-          monthlyAppointments: 0,
-          responseRate: '100%'
-        });
-      }
+  //       await setDoc(userDocRef, {
+  //         uid: user.uid,
+  //         name: user.displayName || 'Google User',
+  //         username: generatedUsername,
+  //         email: user.email || '',
+  //         friendCode: uniqueFriendCode,
+  //         avatar: user.photoURL || `https://picsum.photos/seed/${user.uid}/200`,
+  //         createdAt: new Date().toISOString(),
+  //         totalGroups: 0,
+  //         monthlyAppointments: 0,
+  //         responseRate: '100%'
+  //       });
+  //     }
 
-      router.replace('/');
-    } catch (error: any) {
-      console.log('Google Login Error:', error);
-      Alert.alert('Google Login ไม่สำเร็จ', error.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อกับ Google');
-    } finally {
-      setIsGoogleLoading(false);
-    }
-  };
+  //     router.replace('/');
+  //   } catch (error: any) {
+  //     console.log('Google Login Error:', error);
+  //     Alert.alert('Google Login ไม่สำเร็จ', error.message || 'เกิดข้อผิดพลาดในการเชื่อมต่อกับ Google');
+  //   } finally {
+  //     setIsGoogleLoading(false);
+  //   }
+  // };
 
   const handleLogin = async () => {
     const cleanEmail = email.trim();
@@ -333,7 +333,7 @@ export default function LoginScreen() {
               </View>
 
               {/* Social Buttons (Google Sign-In) */}
-              <View style={styles.socialRow}>
+              {/* <View style={styles.socialRow}>
                 <TouchableOpacity 
                   style={[styles.socialCircle, { width: inputHeight, height: inputHeight, borderRadius: inputHeight / 2 }]}
                   onPress={handleGoogleLogin}
@@ -346,7 +346,7 @@ export default function LoginScreen() {
                     <Image source={{ uri: 'https://cdn-icons-png.flaticon.com/512/300/300221.png' }} style={styles.socialImg} />
                   )}
                 </TouchableOpacity>
-              </View>
+              </View> */}
 
               {/* Footer Link */}
               <View style={styles.footerLinkRow}>

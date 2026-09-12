@@ -18,16 +18,16 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// Firebase & Google Sign-In Imports
-import { GoogleSignin } from '@react-native-google-signin/google-signin';
-import { createUserWithEmailAndPassword, GoogleAuthProvider, signInWithCredential, updateProfile } from 'firebase/auth';
+// Firebase & Google Sign-In Imports (คอมเมนต์ Google ไว้ก่อนเพื่อรันใน Expo Go)
+// import { GoogleSignin } from '@react-native-google-signin/google-signin';
+import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { collection, doc, getDocs, query, setDoc, where } from 'firebase/firestore';
 import { auth, db } from '../../services/firebase';
 
-// ⚙️ กำหนดค่า Web Client ID ของ Google (เปลี่ยนเป็นค่า Web Client ID จริงจาก Firebase Console ของคุณ)
-GoogleSignin.configure({
-  webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com', 
-});
+// ⚙️ กำหนดค่า Web Client ID ของ Google (คอมเมนต์ไว้ก่อน)
+// GoogleSignin.configure({
+//   webClientId: 'YOUR_WEB_CLIENT_ID.apps.googleusercontent.com', 
+// });
 
 export default function RegisterScreen() {
   const router = useRouter();
@@ -78,7 +78,8 @@ export default function RegisterScreen() {
     return uniqueCode;
   };
 
-  // 🚀 ฟังก์ชันสมัครสมาชิก / ล็อกอินด้วย Google
+  // 🚀 ฟังก์ชันสมัครสมาชิก / ล็อกอินด้วย Google (คอมเมนต์ไว้ก่อน)
+  /*
   const handleGoogleSignUp = async () => {
     try {
       setIsGoogleLoading(true);
@@ -125,6 +126,7 @@ export default function RegisterScreen() {
       setIsGoogleLoading(false);
     }
   };
+  */
 
   const handleSignUp = async () => {
     const trimmedUsername = username.trim().toLowerCase();
@@ -343,29 +345,6 @@ export default function RegisterScreen() {
                   <Text style={[styles.primaryButtonText, { fontSize: Math.max(16 * fontSizeBase, 15) }]}>SIGN UP</Text>
                 )}
               </TouchableOpacity>
-
-              {/* Social Divider */}
-              <View style={styles.dividerRow}>
-                <View style={styles.dividerLine} />
-                <Text style={[styles.dividerText, { fontSize: Math.max(13 * fontSizeBase, 12) }]}>Or Sign up with</Text>
-                <View style={styles.dividerLine} />
-              </View>
-
-              {/* Social Buttons (เชื่อมต่อ Google Sign-In) */}
-              <View style={styles.socialRow}>
-                <TouchableOpacity 
-                  style={[styles.socialCircle, { width: inputHeight, height: inputHeight, borderRadius: inputHeight / 2 }]}
-                  onPress={handleGoogleSignUp}
-                  disabled={isGoogleLoading}
-                  activeOpacity={0.8}
-                >
-                  {isGoogleLoading ? (
-                    <ActivityIndicator color="#1C4E4E" size="small" />
-                  ) : (
-                    <Image source={{ uri: 'https://cdn-icons-png.flaticon.com/512/300/300221.png' }} style={styles.socialImg} />
-                  )}
-                </TouchableOpacity>
-              </View>
 
               {/* Return to Login */}
               <View style={styles.footerLinkRow}>
