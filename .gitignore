@@ -42,3 +42,16 @@ example
 # generated native folders
 /ios
 /android
+
+# IDE / Editor (เช่น VS Code หรือ Android Studio)
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Log files ทั่วไป
+*.log
+
+# ตัวแปรสภาพแวดล้อมเฉพาะเครื่อง (ถ้ามีสร้างเพิ่ม)
+.env.development.local
+.env.production.local
