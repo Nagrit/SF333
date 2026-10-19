@@ -2,13 +2,14 @@ import * as Clipboard from 'expo-clipboard';
 import * as Linking from 'expo-linking';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { ArrowLeft, MapPin, Plus, Settings, Share2, Trash2, UserMinus, X } from 'lucide-react-native';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Image,
   Modal,
   Platform,
+  RefreshControl,
   ScrollView,
   Share,
   StatusBar,
@@ -16,48 +17,66 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { apiFetch } from '../../services/api';
 
-// Firebase Imports
-import { collection, deleteDoc, doc, getDoc, getDocs, query, updateDoc, where } from 'firebase/firestore';
-import { auth, db } from '../../services/firebase';
-
-interface GroupAppointment {
+export interface GroupAppointment {
   id: string;
   title: string;
   category?: string;
   dateText: string;
   location?: string;
   creator: string;
-  headerBg: string;
+  headerBg?: string;
   isVote?: boolean;
   statusText?: string;
-  statusBg?: string;
-  statusColor?: string;
   avatars?: string[];
+}
+
+export interface GroupMember {
+  id: string;
+  name: string;
+  username?: string;
+  avatar: string;
+}
+
+export interface GroupData {
+  id: string;
+  name: string;
+  createdBy: string;
+  allowMemberInvite?: boolean;
+  members: GroupMember[];
+}
+
+export interface CurrentUser {
+  id: string;
+  name: string;
 }
 
 export default function GroupDetailScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const insets = useSafeAreaInsets();
-  const currentUser = auth.currentUser;
 
+  const groupId = (params.id as string) || '';
+
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null);
+  const [groupData, setGroupData] = useState<GroupData | null>(null);
+  const [groupName, setGroupName] = useState<string>((params.name as string) || '');
+  const [appointments, setAppointments] = useState<GroupAppointment[]>([]);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Modal แชร์ลิงก์
   const [isShareModalOpen, setIsShareModalOpen] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  const groupId = (params.id as string) || '';
-  const [groupName, setGroupName] = useState((params.name as string) || 'ทีมออฟฟิศ 💻');
-  const [groupData, setGroupData] = useState<any>(null);
-  const [appointments, setAppointments] = useState<GroupAppointment[]>([]);
-  const [groupMembers, setGroupMembers] = useState<any[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
-
-  // Modal สำหรับตั้งค่า/แก้ไขกลุ่ม
+  // Modal ตั้งค่า/แก้ไขกลุ่ม
   const [isSettingsModalOpen, setIsSettingsModalOpen] = useState(false);
-  const [editGroupName, setEditGroupName] = useState(groupName);
+  const [editGroupName, setEditGroupName] = useState('');
   const [allowMemberInvite, setAllowMemberInvite] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
 
@@ -66,102 +85,81 @@ export default function GroupDetailScreen() {
     queryParams: { group: groupId },
   });
 
-  // ดึงข้อมูลกลุ่ม, สมาชิก และนัดหมายจาก Firestore
-  useEffect(() => {
-    const fetchGroupDetails = async () => {
-      try {
-        setIsLoading(true);
+  // ดึงข้อมูลผู้ใช้ปัจจุบัน ข้อมูลกลุ่ม และนัดหมายจาก Fastify API
+  const fetchGroupData = useCallback(async () => {
+    if (!groupId) return;
 
-        if (groupId) {
-          const groupDocRef = doc(db, 'groups', groupId);
-          const groupDocSnap = await getDoc(groupDocRef);
-          if (groupDocSnap.exists()) {
-            const data = groupDocSnap.data();
-            setGroupData(data);
-            setGroupName(data.name);
-            setEditGroupName(data.name);
-            setAllowMemberInvite(data.allowMemberInvite ?? true);
+    try {
+      const [meRes, groupRes, appRes] = await Promise.all([
+        apiFetch<any>('/api/auth/me').catch(() => null),
+        apiFetch<any>(`/api/groups/${groupId}`).catch(() => null),
+        apiFetch<any[]>(`/api/groups/${groupId}/appointments`).catch(() => []),
+      ]);
 
-            // ดึงข้อมูลโปรไฟล์ของสมาชิกในกลุ่ม
-            if (data.members && Array.isArray(data.members)) {
-              const membersList: any[] = [];
-              for (const memberUid of data.members) {
-                const userDoc = await getDoc(doc(db, 'users', memberUid));
-                if (userDoc.exists()) {
-                  const userData = userDoc.data();
-                  membersList.push({
-                    id: memberUid,
-                    name: userData.name || 'สมาชิก',
-                    username: userData.username || '',
-                    avatar: userData.avatar || `https://picsum.photos/seed/${memberUid}/100`,
-                  });
-                }
-              }
-              setGroupMembers(membersList);
-            }
-          }
-        }
-
-        // ดึงนัดหมายของกลุ่ม
-        const q = query(collection(db, 'appointments'), where('groupId', '==', groupId));
-        const querySnapshot = await getDocs(q);
-        const loadedAppointments: GroupAppointment[] = [];
-
-        querySnapshot.forEach((docSnap) => {
-          const data = docSnap.data();
-          loadedAppointments.push({
-            id: docSnap.id,
-            title: data.title || 'นัดหมาย',
-            category: data.category || '🍔นัดกินข้าว',
-            dateText: data.dateText || 'เร็วๆ นี้',
-            location: data.location || 'สถานที่นัดหมาย',
-            creator: data.creator || 'สมาชิก',
-            headerBg: data.headerBg || '#a1c2be',
-            isVote: data.isVote || false,
-            statusText: data.statusText || (data.isVote ? 'รอการยืนยัน' : 'ยืนยันแล้ว'),
-            avatars: data.avatars || ['https://picsum.photos/seed/1/100', 'https://picsum.photos/seed/2/100']
-          });
+      if (meRes) {
+        setCurrentUser({
+          id: meRes.id || '',
+          name: meRes.name || meRes.displayName || 'ผู้ใช้งาน',
         });
-
-        if (loadedAppointments.length === 0) {
-          setAppointments([
-            {
-              id: '1',
-              title: 'ชาบูกับชาวแก๊งค์ 🍲',
-              category: '🍔นัดกินข้าว',
-              dateText: 'วันเสาร์ 21 ก.พ. 2026 (18.00-21.00 น.)',
-              location: 'ร้าน Shabu Baru (Siam Paragon)',
-              creator: 'ทิฟ',
-              headerBg: '#ffffff',
-              isVote: true,
-              statusText: 'รอการยืนยัน',
-            },
-            {
-              id: '2',
-              title: 'ชาบูกับชาวแก๊งค์ 🍲',
-              category: '🍔นัดกินข้าว',
-              dateText: 'วันเสาร์ 21 ก.พ. 2026 (18.00-21.00 น.)',
-              location: 'ร้าน Shabu Baru (Siam Paragon)',
-              creator: 'ทิฟ',
-              headerBg: '#ffffff',
-              isVote: false,
-              statusText: 'ยืนยันแล้ว',
-            },
-          ]);
-        } else {
-          setAppointments(loadedAppointments);
-        }
-      } catch (error) {
-        console.log('Error fetching group details:', error);
-      } finally {
-        setIsLoading(false);
       }
-    };
 
-    fetchGroupDetails();
-  }, [groupId]);
+      if (groupRes) {
+        const formattedMembers: GroupMember[] = Array.isArray(groupRes.members)
+          ? groupRes.members.map((m: any) => ({
+              id: m.id || '',
+              name: m.name || m.displayName || 'สมาชิก',
+              username: m.username || '',
+              avatar: m.avatar || m.avatarUrl || 'https://cdn-icons-png.flaticon.com/512/149/149071.png',
+            }))
+          : [];
 
-  // ฟังก์ชันบันทึกการแก้ไขชื่อกลุ่มและการตั้งค่าสิทธิ์
+        const formattedGroup: GroupData = {
+          id: groupRes.id || groupId,
+          name: groupRes.name || (params.name as string) || 'กลุ่ม',
+          createdBy: groupRes.createdBy || groupRes.createdById || '',
+          allowMemberInvite: groupRes.allowMemberInvite ?? true,
+          members: formattedMembers,
+        };
+
+        setGroupData(formattedGroup);
+        setGroupName(formattedGroup.name);
+        setEditGroupName(formattedGroup.name);
+        setAllowMemberInvite(formattedGroup.allowMemberInvite ?? true);
+      }
+
+      if (Array.isArray(appRes)) {
+        setAppointments(
+          appRes.map((app: any) => ({
+            id: app.id || '',
+            title: app.title || 'นัดหมาย',
+            category: app.category || 'ทั่วไป',
+            dateText: app.dateText || 'ไม่ระบุวันเวลา',
+            location: app.location || '',
+            creator: app.creator || 'สมาชิก',
+            isVote: app.isVote ?? false,
+            statusText: app.statusText || (app.isVote ? 'รอโหวต' : 'ยืนยันแล้ว'),
+            avatars: Array.isArray(app.avatars) ? app.avatars : [],
+          }))
+        );
+      }
+    } catch (error: any) {
+      console.error('Error fetching group details:', error);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }, [groupId, params.name]);
+
+  useEffect(() => {
+    fetchGroupData();
+  }, [fetchGroupData]);
+
+  const onRefresh = () => {
+    setIsRefreshing(true);
+    fetchGroupData();
+  };
+
+  // บันทึกการแก้ไขข้อมูลกลุ่ม
   const handleUpdateGroup = async () => {
     if (!editGroupName.trim()) {
       Alert.alert('ข้อผิดพลาด', 'กรุณากรอกชื่อกลุ่ม');
@@ -170,16 +168,22 @@ export default function GroupDetailScreen() {
 
     try {
       setIsSaving(true);
-      await updateDoc(doc(db, 'groups', groupId), {
-        name: editGroupName.trim(),
-        allowMemberInvite: allowMemberInvite
+      await apiFetch(`/api/groups/${groupId}`, {
+        method: 'PUT',
+        body: JSON.stringify({
+          name: editGroupName.trim(),
+          allowMemberInvite,
+        }),
       });
 
       setGroupName(editGroupName.trim());
+      setGroupData((prev) =>
+        prev ? { ...prev, name: editGroupName.trim(), allowMemberInvite } : null
+      );
       setIsSettingsModalOpen(false);
       Alert.alert('สำเร็จ', 'อัปเดตข้อมูลกลุ่มเรียบร้อยแล้ว');
-    } catch (error) {
-      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถอัปเดตกลุ่มได้');
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถอัปเดตกลุ่มได้');
     } finally {
       setIsSaving(false);
     }
@@ -191,9 +195,8 @@ export default function GroupDetailScreen() {
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // ฟังก์ชันกดเปิด Modal แชร์ลิงก์ (ตรวจสอบสิทธิ์ว่าอนุญาตให้สมาชิกแชร์ไหม)
   const handleOpenShareModal = () => {
-    const isUserOwner = groupData?.createdBy === currentUser?.uid;
+    const isUserOwner = groupData?.createdBy === currentUser?.id;
     const canInvite = isUserOwner || groupData?.allowMemberInvite !== false;
 
     if (!canInvite) {
@@ -203,7 +206,6 @@ export default function GroupDetailScreen() {
     setIsShareModalOpen(true);
   };
 
-  // ฟังก์ชันแชร์ลิงก์ทันทีผ่านระบบ Native Share
   const handleShareGroup = async () => {
     try {
       await Share.share({
@@ -215,43 +217,43 @@ export default function GroupDetailScreen() {
     }
   };
 
-
-  // ฟังก์ชันลบสมาชิกออกจากกลุ่ม
+  // ลบสมาชิกออกจากกลุ่ม
   const handleRemoveMember = (memberId: string, memberName: string) => {
     if (memberId === groupData?.createdBy) {
       Alert.alert('แจ้งเตือน', 'ไม่สามารถลบเจ้าของกลุ่มได้');
       return;
     }
 
-    Alert.alert(
-      'ลบสมาชิก',
-      `คุณต้องการนำ "${memberName}" ออกจากกลุ่มใช่หรือไม่?`,
-      [
-        { text: 'ยกเลิก', style: 'cancel' },
-        {
-          text: 'ลบ',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              const updatedMembers = groupData.members.filter((id: string) => id !== memberId);
-              await updateDoc(doc(db, 'groups', groupId), {
-                members: updatedMembers,
-                membersCount: updatedMembers.length,
-              });
+    Alert.alert('ลบสมาชิก', `คุณต้องการนำ "${memberName}" ออกจากกลุ่มใช่หรือไม่?`, [
+      { text: 'ยกเลิก', style: 'cancel' },
+      {
+        text: 'ลบ',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await apiFetch(`/api/groups/${groupId}/members/${memberId}`, {
+              method: 'DELETE',
+            });
 
-              setGroupMembers(prev => prev.filter(m => m.id !== memberId));
-              setGroupData((prev: any) => ({ ...prev, members: updatedMembers, membersCount: updatedMembers.length }));
-              Alert.alert('สำเร็จ', `นำ ${memberName} ออกจากกลุ่มแล้ว`);
-            } catch (error) {
-              Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถลบสมาชิกได้');
-            }
+            setGroupData((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    members: prev.members.filter((m) => m.id !== memberId),
+                  }
+                : null
+            );
+
+            Alert.alert('สำเร็จ', `นำ ${memberName} ออกจากกลุ่มแล้ว`);
+          } catch (error: any) {
+            Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถลบสมาชิกได้');
           }
-        }
-      ]
-    );
+        },
+      },
+    ]);
   };
 
-  // ฟังก์ชันลบกลุ่ม
+  // ลบกลุ่ม
   const handleDeleteGroup = () => {
     Alert.alert(
       'ลบกลุ่ม',
@@ -263,24 +265,36 @@ export default function GroupDetailScreen() {
           style: 'destructive',
           onPress: async () => {
             try {
-              await deleteDoc(doc(db, 'groups', groupId));
+              await apiFetch(`/api/groups/${groupId}`, {
+                method: 'DELETE',
+              });
               Alert.alert('สำเร็จ', 'ลบกลุ่มเรียบร้อยแล้ว', [
-                { text: 'ตกลง', onPress: () => router.back() }
+                { text: 'ตกลง', onPress: () => router.back() },
               ]);
-            } catch (error) {
-              Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถลบกลุ่มได้');
+            } catch (error: any) {
+              Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถลบกลุ่มได้');
             }
-          }
-        }
+          },
+        },
       ]
     );
   };
 
-  const isOwner = groupData && currentUser && groupData.createdBy === currentUser.uid;
+  const isOwner = Boolean(groupData && currentUser && groupData.createdBy === currentUser.id);
 
-  const voteAppointments = appointments.filter(i => i.isVote);
-  const normalAppointments = appointments.filter(i => !i.isVote);
+  const voteAppointments = appointments.filter((i) => i.isVote);
+  const normalAppointments = appointments.filter((i) => !i.isVote);
 
+  if (isLoading) {
+    return (
+      <View style={{ flex: 1, backgroundColor: '#dbe6e5', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#468f92" />
+      </View>
+    );
+  }
+
+  const headerPaddingTop =
+    Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#dbe6e5' }}>
@@ -291,11 +305,11 @@ export default function GroupDetailScreen() {
         style={{
           backgroundColor: '#468f92',
           paddingHorizontal: 20,
-          paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12,
+          paddingTop: headerPaddingTop,
           paddingBottom: 16,
           flexDirection: 'row',
           alignItems: 'center',
-          justifyContent: 'space-between'
+          justifyContent: 'space-between',
         }}
       >
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12, flex: 1 }}>
@@ -307,21 +321,18 @@ export default function GroupDetailScreen() {
               <Text numberOfLines={1} style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 18 }}>
                 {groupName}
               </Text>
-              <Text style={{ fontSize: 16 }}>💻</Text>
             </View>
             <Text style={{ color: '#e0f2f1', fontSize: 12, marginTop: 2 }}>
-              สมาชิก {groupMembers.length} คน
+              สมาชิก {groupData?.members?.length || 0} คน
             </Text>
           </View>
         </View>
 
         <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-          {/* ปุ่มแชร์ (เปิด Modal ชวนเพื่อน) */}
           <TouchableOpacity onPress={handleOpenShareModal} style={{ padding: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20 }}>
             <Share2 color="#ffffff" size={18} />
           </TouchableOpacity>
 
-          {/* ปุ่มตั้งค่า (เฉพาะผู้สร้างกลุ่ม) */}
           {isOwner && (
             <TouchableOpacity onPress={() => setIsSettingsModalOpen(true)} style={{ padding: 6, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 20 }}>
               <Settings color="#ffffff" size={18} />
@@ -331,118 +342,152 @@ export default function GroupDetailScreen() {
       </View>
 
       {/* Main Content */}
-      {isLoading ? (
-        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
-          <ActivityIndicator size="large" color="#468f92" />
-        </View>
-      ) : (
-        <ScrollView
-          showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 90 }}
-        >
-          {/* หมวดหมู่: โหวตเวลาหนัดหมาย */}
-          {voteAppointments.length > 0 && (
-            <>
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12, marginTop: 4 }}>
-                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#334155' }}>โหวตเวลานัดหมาย</Text>
-                <Text style={{ fontSize: 14 }}>👍</Text>
-              </View>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 90 }}
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#468f92" />}
+      >
+        {/* หมวดหมู่: โหวตเวลานัดหมาย */}
+        {voteAppointments.length > 0 && (
+          <>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12, marginTop: 4 }}>
+              <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#334155' }}>โหวตเวลานัดหมาย</Text>
+              <Text style={{ fontSize: 14 }}>👍</Text>
+            </View>
 
-              {voteAppointments.map((item) => (
-                <View key={item.id} style={{ backgroundColor: '#ffffff', borderRadius: 20, padding: 16, marginBottom: 16, elevation: 2 }}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+            {voteAppointments.map((item) => (
+              <View key={item.id} style={{ backgroundColor: '#ffffff', borderRadius: 20, padding: 16, marginBottom: 16, elevation: 2 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                  {item.category ? (
                     <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
                       <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#d97706' }}>{item.category}</Text>
                     </View>
-                    <View style={{ backgroundColor: '#f3f4f6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                      <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#4b5563' }}>❓ {item.statusText}</Text>
-                    </View>
+                  ) : null}
+                  <View style={{ backgroundColor: '#f3f4f6', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#4b5563' }}>❓ {item.statusText || 'รอการยืนยัน'}</Text>
                   </View>
+                </View>
 
-                  <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1f2937', marginBottom: 4 }}>{item.title}</Text>
-                  <Text style={{ fontSize: 13, color: '#4b5563', marginBottom: 6 }}>{item.dateText}</Text>
+                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1f2937', marginBottom: 4 }}>{item.title}</Text>
+                <Text style={{ fontSize: 13, color: '#4b5563', marginBottom: 6 }}>{item.dateText}</Text>
 
+                {item.location ? (
                   <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 }}>
                     <MapPin size={14} color="#6b7280" />
                     <Text style={{ fontSize: 12, color: '#6b7280' }}>{item.location}</Text>
                   </View>
+                ) : null}
 
-                  <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                    <TouchableOpacity
-                      onPress={() => router.push('/vote-appointment' as any)}
-                    >
-                      <Text style={{ color: '#217371', fontWeight: 'bold', fontSize: 13, textDecorationLine: 'underline' }}>เปิดโหวตเวลา</Text>
-                    </TouchableOpacity>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <TouchableOpacity onPress={() => router.push({ pathname: '/vote-appointment', params: { id: item.id } })}>
+                    <Text style={{ color: '#217371', fontWeight: 'bold', fontSize: 13, textDecorationLine: 'underline' }}>
+                      เปิดโหวตเวลา
+                    </Text>
+                  </TouchableOpacity>
 
-                    {/* แสดงรูปโปรไฟล์สมาชิกย่อ */}
+                  {item.avatars && item.avatars.length > 0 && (
                     <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                      <Image source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100' }} style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#fff' }} />
-                      <Image source={{ uri: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100' }} style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#fff', marginLeft: -8 }} />
-                      <Image source={{ uri: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100' }} style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#fff', marginLeft: -8 }} />
-                      <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center', marginLeft: -8, borderWidth: 1.5, borderColor: '#fff' }}>
-                        <Text style={{ color: '#fff', fontSize: 9, fontWeight: 'bold' }}>+2</Text>
-                      </View>
+                      {item.avatars.slice(0, 3).map((url, idx) => (
+                        <Image
+                          key={idx}
+                          source={{ uri: url }}
+                          style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#ffffff', marginLeft: idx === 0 ? 0 : -8 }}
+                        />
+                      ))}
+                      {item.avatars.length > 3 && (
+                        <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center', marginLeft: -8, borderWidth: 1.5, borderColor: '#ffffff' }}>
+                          <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: 'bold' }}>+{item.avatars.length - 3}</Text>
+                        </View>
+                      )}
                     </View>
-                  </View>
+                  )}
                 </View>
-              ))}
-            </>
-          )}
+              </View>
+            ))}
+          </>
+        )}
 
-          {/* หมวดหมู่: นัดหมายเร็วๆ นี้ */}
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12, marginTop: 10 }}>
-            <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#334155' }}>นัดหมายเร็วๆ นี้ ({normalAppointments.length})</Text>
-            <Text style={{ fontSize: 14 }}>📅</Text>
+        {/* หมวดหมู่: นัดหมายเร็วๆ นี้ */}
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 12, marginTop: 10 }}>
+          <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#334155' }}>
+            นัดหมายเร็วๆ นี้ ({normalAppointments.length})
+          </Text>
+          <Text style={{ fontSize: 14 }}>📅</Text>
+        </View>
+
+        {normalAppointments.length === 0 ? (
+          <View style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: 24, alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}>
+            <Text style={{ color: '#9ca3af', fontSize: 13 }}>ไม่มีนัดหมายในขณะนี้</Text>
           </View>
-
-          {normalAppointments.map((item) => (
+        ) : (
+          normalAppointments.map((item) => (
             <View key={item.id} style={{ backgroundColor: '#ffffff', borderRadius: 20, padding: 16, marginBottom: 16, elevation: 2 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
-                  <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#d97706' }}>{item.category}</Text>
-                </View>
-                <View style={{ backgroundColor: '#dcfce7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
-                  <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#15803d' }}>✅ {item.statusText}</Text>
+                {item.category ? (
+                  <View style={{ backgroundColor: '#fef3c7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#d97706' }}>{item.category}</Text>
+                  </View>
+                ) : null}
+                <View style={{ backgroundColor: '#dcfce7', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 8 }}>
+                  <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#15803d' }}>✅ {item.statusText || 'ยืนยันแล้ว'}</Text>
                 </View>
               </View>
 
               <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1f2937', marginBottom: 4 }}>{item.title}</Text>
               <Text style={{ fontSize: 13, color: '#4b5563', marginBottom: 6 }}>{item.dateText}</Text>
 
-              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 }}>
-                <MapPin size={14} color="#6b7280" />
-                <Text style={{ fontSize: 12, color: '#6b7280' }}>{item.location}</Text>
-              </View>
+              {item.location ? (
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 14 }}>
+                  <MapPin size={14} color="#6b7280" />
+                  <Text style={{ fontSize: 12, color: '#6b7280' }}>{item.location}</Text>
+                </View>
+              ) : null}
 
               <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-                <TouchableOpacity
-                  onPress={() => router.push('/appointment-detail' as any)}
-                >
-                  <Text style={{ color: '#217371', fontWeight: 'bold', fontSize: 13, textDecorationLine: 'underline' }}>ดูรายละเอียดนัดหมาย</Text>
+                <TouchableOpacity onPress={() => router.push({ pathname: '/appointment-detail', params: { id: item.id } })}>
+                  <Text style={{ color: '#217371', fontWeight: 'bold', fontSize: 13, textDecorationLine: 'underline' }}>
+                    ดูรายละเอียดนัดหมาย
+                  </Text>
                 </TouchableOpacity>
 
-                {/* แสดงรูปโปรไฟล์สมาชิกย่อ */}
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <Image source={{ uri: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100' }} style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#fff' }} />
-                  <Image source={{ uri: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100' }} style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#fff', marginLeft: -8 }} />
-                  <Image source={{ uri: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100' }} style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#fff', marginLeft: -8 }} />
-                  <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center', marginLeft: -8, borderWidth: 1.5, borderColor: '#fff' }}>
-                    <Text style={{ color: '#fff', fontSize: 9, fontWeight: 'bold' }}>+2</Text>
+                {item.avatars && item.avatars.length > 0 && (
+                  <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    {item.avatars.slice(0, 3).map((url, idx) => (
+                      <Image
+                        key={idx}
+                        source={{ uri: url }}
+                        style={{ width: 26, height: 26, borderRadius: 13, borderWidth: 1.5, borderColor: '#ffffff', marginLeft: idx === 0 ? 0 : -8 }}
+                      />
+                    ))}
+                    {item.avatars.length > 3 && (
+                      <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: '#334155', alignItems: 'center', justifyContent: 'center', marginLeft: -8, borderWidth: 1.5, borderColor: '#ffffff' }}>
+                        <Text style={{ color: '#ffffff', fontSize: 9, fontWeight: 'bold' }}>+{item.avatars.length - 3}</Text>
+                      </View>
+                    )}
                   </View>
-                </View>
+                )}
               </View>
             </View>
-          ))}
-        </ScrollView>
-      )}
+          ))
+        )}
+      </ScrollView>
 
       {/* Floating Action Button (+) */}
       <TouchableOpacity
-        onPress={() => router.push('/create-appointment' as any)}
+        onPress={() => router.push({ pathname: '/create-appointment', params: { groupId } })}
         style={{
-          position: 'absolute', right: 20, bottom: 24, width: 52, height: 52, borderRadius: 26,
-          backgroundColor: '#468f92', alignItems: 'center', justifyContent: 'center', elevation: 5
+          position: 'absolute',
+          right: 20,
+          bottom: 24,
+          width: 52,
+          height: 52,
+          borderRadius: 26,
+          backgroundColor: '#468f92',
+          alignItems: 'center',
+          justifyContent: 'center',
+          elevation: 5,
         }}
+        activeOpacity={0.85}
       >
         <Plus color="#ffffff" size={28} strokeWidth={2.5} />
       </TouchableOpacity>
@@ -475,7 +520,7 @@ export default function GroupDetailScreen() {
               alignItems: 'center',
               justifyContent: 'space-between',
               backgroundColor: '#f8fafc',
-              marginBottom: 20
+              marginBottom: 20,
             }}>
               <View style={{ flex: 1, marginRight: 10 }}>
                 <Text style={{ fontSize: 11, color: '#64748b', marginBottom: 2 }}>ลิงก์คำเชิญเข้าร่วมกลุ่ม</Text>
@@ -492,7 +537,7 @@ export default function GroupDetailScreen() {
                   height: 40,
                   borderRadius: 12,
                   justifyContent: 'center',
-                  alignItems: 'center'
+                  alignItems: 'center',
                 }}
               >
                 <Share2 color="#ffffff" size={20} />
@@ -515,12 +560,9 @@ export default function GroupDetailScreen() {
                 justifyContent: 'center',
                 alignItems: 'center',
                 gap: 8,
-                shadowColor: '#1C4E4E',
-                shadowOffset: { width: 0, height: 4 },
-                shadowOpacity: 0.2,
-                shadowRadius: 4,
-                elevation: 3
+                elevation: 3,
               }}
+              activeOpacity={0.8}
             >
               <Share2 color="#ffffff" size={20} />
               <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 15, letterSpacing: 0.5 }}>แชร์ทันที</Text>
@@ -566,6 +608,7 @@ export default function GroupDetailScreen() {
                 onPress={handleUpdateGroup}
                 disabled={isSaving}
                 style={{ backgroundColor: '#468f92', paddingVertical: 12, borderRadius: 12, alignItems: 'center', marginBottom: 20 }}
+                activeOpacity={0.8}
               >
                 {isSaving ? (
                   <ActivityIndicator color="#ffffff" size="small" />
@@ -575,9 +618,11 @@ export default function GroupDetailScreen() {
               </TouchableOpacity>
 
               {/* รายชื่อสมาชิกในกลุ่ม */}
-              <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 8 }}>สมาชิกในกลุ่ม ({groupMembers.length} คน)</Text>
+              <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 8 }}>
+                สมาชิกในกลุ่ม ({groupData?.members?.length || 0} คน)
+              </Text>
               <View style={{ gap: 8, marginBottom: 20 }}>
-                {groupMembers.map((member) => (
+                {groupData?.members?.map((member) => (
                   <View key={member.id} style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: '#f9fafb', padding: 8, borderRadius: 10 }}>
                     <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, flex: 1 }}>
                       <Image source={{ uri: member.avatar }} style={{ width: 32, height: 32, borderRadius: 16 }} />
@@ -603,6 +648,7 @@ export default function GroupDetailScreen() {
                   handleDeleteGroup();
                 }}
                 style={{ flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 6, paddingVertical: 12, borderRadius: 12, backgroundColor: '#fef2f2' }}
+                activeOpacity={0.8}
               >
                 <Trash2 size={16} color="#ef4444" />
                 <Text style={{ color: '#ef4444', fontWeight: 'bold', fontSize: 13 }}>ลบกลุ่มนี้</Text>
@@ -611,7 +657,6 @@ export default function GroupDetailScreen() {
           </View>
         </View>
       </Modal>
-
     </View>
   );
 }

@@ -1,17 +1,21 @@
-import React, { useState } from 'react';
-import { 
-  View, 
-  Text, 
-  TouchableOpacity, 
-  ScrollView, 
-  StatusBar, 
-  Platform 
-} from 'react-native';
 import { useRouter } from 'expo-router';
+import { ArrowLeft, Calendar, Trash2 } from 'lucide-react-native';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Platform,
+  ScrollView,
+  StatusBar,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ArrowLeft, Trash2, Calendar } from 'lucide-react-native';
 
-interface NotificationItem {
+import { apiFetch } from '../../services/api';
+
+export interface NotificationItem {
   id: string;
   title: string;
   date: string;
@@ -19,69 +23,110 @@ interface NotificationItem {
   isUnread: boolean;
 }
 
-const INITIAL_NOTIFICATIONS: NotificationItem[] = [
-  {
-    id: '1',
-    title: 'Friends Calendar',
-    date: 'Feb 12, 2026',
-    message: 'Keep paying with Friends to welcome your friend to see in Monday',
-    isUnread: true,
-  },
-  {
-    id: '2',
-    title: 'Friends Calendar',
-    date: 'Feb 12, 2026',
-    message: 'Keep paying with Friends to welcome your friend to see in Monday',
-    isUnread: false,
-  },
-  {
-    id: '3',
-    title: 'Friends Calendar',
-    date: 'Feb 12, 2026',
-    message: 'Keep paying with Friends to welcome your friend to see in Monday',
-    isUnread: false,
-  },
-];
+export interface ApiNotificationResponse {
+  unreadCount?: number;
+  data?: Array<{
+    id: string;
+    title: string;
+    message: string;
+    isRead?: boolean;
+    createdAt?: string;
+  }>;
+}
 
 export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
 
-  const [notifications, setNotifications] = useState<NotificationItem[]>(INITIAL_NOTIFICATIONS);
+  const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [selectedNotif, setSelectedNotif] = useState<NotificationItem | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // ฟังก์ชันลบทั้งหมด
-  const handleDeleteAll = () => {
-    setNotifications([]);
+  const fetchNotifications = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      const res = await apiFetch<ApiNotificationResponse | NotificationItem[]>('/api/notifications');
+
+      let rawList: any[] = [];
+      if (res && typeof res === 'object' && 'data' in res && Array.isArray(res.data)) {
+        rawList = res.data;
+      } else if (Array.isArray(res)) {
+        rawList = res;
+      }
+
+      // แมปข้อมูลจาก DB Schema (isRead, createdAt) เข้ากับ UI (isUnread, date)
+      const mappedNotifications: NotificationItem[] = rawList.map((item) => ({
+        id: item.id,
+        title: item.title || 'Notification',
+        message: item.message || '',
+        date: item.createdAt
+          ? new Date(item.createdAt).toLocaleDateString('th-TH', {
+              day: 'numeric',
+              month: 'short',
+            })
+          : item.date || '',
+        isUnread: typeof item.isUnread === 'boolean' ? item.isUnread : item.isRead === false,
+      }));
+
+      setNotifications(mappedNotifications);
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถโหลดการแจ้งเตือนได้');
+      setNotifications([]);
+    } finally {
+      setIsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchNotifications();
+  }, [fetchNotifications]);
+
+  const handleDeleteAll = async () => {
+    try {
+      // ลบทีละรายการ หรือเรียก Clear Endpoint
+      await Promise.all(
+        notifications.map((n) => apiFetch(`/api/notifications/${n.id}`, { method: 'DELETE' }))
+      );
+      setNotifications([]);
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถลบการแจ้งเตือนทั้งหมดได้');
+    }
   };
 
-  // ฟังก์ชันลบรายการเดียวในหน้า Detail
-  const handleDeleteItem = (id: string) => {
-    setNotifications(prev => prev.filter(n => n.id !== id));
-    setSelectedNotif(null);
+  const handleDeleteItem = async (id: string) => {
+    try {
+      await apiFetch(`/api/notifications/${id}`, { method: 'DELETE' });
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      setSelectedNotif(null);
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถลบการแจ้งเตือนนี้ได้');
+    }
   };
+
+  const headerPaddingTop =
+    Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 8;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#ffffff' }}>
       <StatusBar barStyle="light-content" backgroundColor="#468f92" translucent={true} />
 
-      {/* Header สีเขียวทีล */}
-      <View 
-        style={{ 
-          backgroundColor: '#468f92', 
-          paddingHorizontal: 20, 
-          paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 8, 
+      {/* Header */}
+      <View
+        style={{
+          backgroundColor: '#468f92',
+          paddingHorizontal: 20,
           paddingBottom: 16,
+          paddingTop: headerPaddingTop,
           flexDirection: 'row',
-          alignItems: 'center'
+          alignItems: 'center',
         }}
       >
-        <TouchableOpacity 
+        <TouchableOpacity
           onPress={() => {
             if (selectedNotif) {
-              setSelectedNotif(null); // ย้อนกลับไปหน้ารายการ
+              setSelectedNotif(null);
             } else {
-              router.back(); // ย้อนกลับไปหน้าก่อนหน้า
+              router.back();
             }
           }}
           style={{ paddingRight: 12 }}
@@ -93,14 +138,40 @@ export default function NotificationsScreen() {
         </Text>
       </View>
 
-      {/* 1. STATE 3: หน้าแสดงรายละเอียดการแจ้งเตือน (Detail View) */}
-      {selectedNotif ? (
+      {isLoading ? (
+        <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+          <ActivityIndicator size="large" color="#468f92" />
+        </View>
+      ) : selectedNotif ? (
         <View style={{ flex: 1, backgroundColor: '#eef5f4', padding: 16 }}>
-          <View style={{ backgroundColor: '#ffffff', borderRadius: 20, padding: 20, elevation: 1 }}>
-            {/* ส่วนหัวการ์ดใน Detail */}
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+          <View
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: 20,
+              padding: 20,
+              elevation: 1,
+            }}
+          >
+            <View
+              style={{
+                flexDirection: 'row',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: 20,
+              }}
+            >
               <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                <View style={{ width: 40, height: 40, borderRadius: 20, backgroundColor: '#217371', alignItems: 'center', justifyContent: 'center', marginRight: 10 }}>
+                <View
+                  style={{
+                    width: 40,
+                    height: 40,
+                    borderRadius: 20,
+                    backgroundColor: '#217371',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    marginRight: 10,
+                  }}
+                >
                   <Calendar color="#ffffff" size={20} />
                 </View>
                 <Text style={{ fontWeight: 'bold', fontSize: 15, color: '#374151' }}>
@@ -108,14 +179,19 @@ export default function NotificationsScreen() {
                 </Text>
               </View>
 
-              {/* ปุ่มลบถังขยะสีส้ม */}
               <TouchableOpacity onPress={() => handleDeleteItem(selectedNotif.id)}>
                 <Trash2 color="#e08955" size={20} />
               </TouchableOpacity>
             </View>
 
-            {/* วันที่และข้อความรายละเอียด */}
-            <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#4a3b32', marginBottom: 6 }}>
+            <Text
+              style={{
+                fontSize: 12,
+                fontWeight: 'bold',
+                color: '#4a3b32',
+                marginBottom: 6,
+              }}
+            >
               {selectedNotif.date}
             </Text>
             <Text style={{ fontSize: 12, color: '#6b7280', lineHeight: 18 }}>
@@ -124,46 +200,66 @@ export default function NotificationsScreen() {
           </View>
         </View>
       ) : (
-        /* 2. STATE 1 & 2: หน้ารวมรายการ หรือ หน้าไม่มีการแจ้งเตือน */
         <View style={{ flex: 1 }}>
-          {notifications.length === 0 ? (
-            /* STATE 1: Empty State (ไม่มีการแจ้งเตือน) */
-            <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', paddingHorizontal: 32 }}>
-              <View style={{ marginBottom: 20, alignItems: 'center' }}>
-                <Text style={{ fontSize: 90, lineHeight: 100 }}>📬</Text>
-              </View>
-              
-              <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#4a3b32', marginBottom: 8, textAlign: 'center' }}>
+          {(notifications || []).length === 0 ? (
+            <View
+              style={{
+                flex: 1,
+                justifyContent: 'center',
+                alignItems: 'center',
+                paddingHorizontal: 32,
+              }}
+            >
+              <Text style={{ fontSize: 90, lineHeight: 100, marginBottom: 20 }}>📬</Text>
+              <Text
+                style={{
+                  fontSize: 18,
+                  fontWeight: 'bold',
+                  color: '#4a3b32',
+                  marginBottom: 8,
+                  textAlign: 'center',
+                }}
+              >
                 No notification yet
               </Text>
-              <Text style={{ fontSize: 12, color: '#6b7280', textAlign: 'center', lineHeight: 18, marginBottom: 24 }}>
+              <Text
+                style={{
+                  fontSize: 12,
+                  color: '#6b7280',
+                  textAlign: 'center',
+                  lineHeight: 18,
+                  marginBottom: 24,
+                }}
+              >
                 Your notification will appear here once you've received them
               </Text>
-
-              <View style={{ alignItems: 'center', marginTop: 20 }}>
-                <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#468f92', marginBottom: 4 }}>
-                  Missing notification?
+            </View>
+          ) : (
+            <View style={{ flex: 1, backgroundColor: '#ffffff' }}>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  paddingHorizontal: 20,
+                  paddingVertical: 14,
+                }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#4a3b32' }}>
+                  Previously
                 </Text>
-                <TouchableOpacity>
-                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#3caea3', textDecorationLine: 'underline' }}>
-                    Go to setting
+                <TouchableOpacity onPress={handleDeleteAll}>
+                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#ed8b6e' }}>
+                    Delete all
                   </Text>
                 </TouchableOpacity>
               </View>
-            </View>
-          ) : (
-            /* STATE 2: List State (มีรายการแจ้งเตือน) */
-            <View style={{ flex: 1, backgroundColor: '#ffffff' }}>
-              {/* แถบหัวข้อ Previously & Delete All */}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingHorizontal: 20, paddingVertical: 14 }}>
-                <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#4a3b32' }}>Previously</Text>
-                <TouchableOpacity onPress={handleDeleteAll}>
-                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#ed8b6e' }}>Delete all</Text>
-                </TouchableOpacity>
-              </View>
 
-              <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingHorizontal: 16 }}>
-                {notifications.map((item) => (
+              <ScrollView
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingHorizontal: 16 }}
+              >
+                {(notifications || []).map((item) => (
                   <TouchableOpacity
                     key={item.id}
                     onPress={() => setSelectedNotif(item)}
@@ -173,47 +269,67 @@ export default function NotificationsScreen() {
                       padding: 14,
                       marginBottom: 10,
                       flexDirection: 'row',
-                      alignItems: 'flex-start'
+                      alignItems: 'flex-start',
                     }}
                   >
-                    {/* ไอคอนทรงกลม */}
-                    <View style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                    <View
+                      style={{
+                        width: 38,
+                        height: 38,
+                        borderRadius: 19,
+                        backgroundColor: '#ffffff',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 12,
+                      }}
+                    >
                       <Calendar color="#217371" size={18} />
                     </View>
 
-                    {/* รายละเอียด */}
                     <View style={{ flex: 1 }}>
-                      <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 2 }}>
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          marginBottom: 2,
+                        }}
+                      >
                         <Text style={{ fontWeight: 'bold', fontSize: 13, color: '#374151' }}>
                           {item.title}
                         </Text>
                         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                          <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#4a3b32', marginRight: 4 }}>
+                          <Text
+                            style={{
+                              fontSize: 10,
+                              fontWeight: 'bold',
+                              color: '#4a3b32',
+                              marginRight: 4,
+                            }}
+                          >
                             {item.date}
                           </Text>
                           {item.isUnread && (
-                            <View style={{ width: 5, height: 5, borderRadius: 2.5, backgroundColor: '#468f92' }} />
+                            <View
+                              style={{
+                                width: 5,
+                                height: 5,
+                                borderRadius: 2.5,
+                                backgroundColor: '#468f92',
+                              }}
+                            />
                           )}
                         </View>
                       </View>
-                      <Text style={{ fontSize: 11, color: '#6b7280', lineHeight: 15 }} numberOfLines={2}>
+                      <Text
+                        style={{ fontSize: 11, color: '#6b7280', lineHeight: 15 }}
+                        numberOfLines={2}
+                      >
                         {item.message}
                       </Text>
                     </View>
                   </TouchableOpacity>
                 ))}
-
-                {/* Missing notification ด้านล่าง */}
-                <View style={{ alignItems: 'center', marginTop: 32, marginBottom: 24 }}>
-                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#468f92', marginBottom: 4 }}>
-                    Missing notification?
-                  </Text>
-                  <TouchableOpacity>
-                    <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#3caea3', textDecorationLine: 'underline' }}>
-                      Go to setting
-                    </Text>
-                  </TouchableOpacity>
-                </View>
               </ScrollView>
             </View>
           )}

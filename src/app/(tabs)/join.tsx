@@ -1,17 +1,27 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { arrayUnion, doc, getDoc, updateDoc } from 'firebase/firestore';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, Alert, Text, TouchableOpacity, View } from 'react-native';
-import { auth, db } from '../../services/firebase';
+import {
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
+import { apiFetch } from '../../services/api';
+
+export interface GroupSummary {
+  id: string;
+  name: string;
+}
 
 export default function JoinGroupScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
   const groupId = params.group as string;
-  const currentUser = auth.currentUser;
 
   const [loading, setLoading] = useState(true);
-  const [groupInfo, setGroupInfo] = useState<any>(null);
+  const [groupInfo, setGroupInfo] = useState<GroupSummary | null>(null);
 
   useEffect(() => {
     const fetchGroup = async () => {
@@ -22,16 +32,11 @@ export default function JoinGroupScreen() {
       }
 
       try {
-        const docRef = doc(db, 'groups', groupId);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setGroupInfo(docSnap.data());
-        } else {
-          Alert.alert('ไม่พบกลุ่ม', 'กลุ่มนี้อาจถูกลบไปแล้ว');
-          router.replace('/(tabs)');
-        }
-      } catch (error) {
-        console.log(error);
+        const data = await apiFetch<GroupSummary>(`/api/groups/${groupId}`);
+        setGroupInfo(data);
+      } catch (error: any) {
+        Alert.alert('ไม่พบกลุ่ม', error.message || 'กลุ่มนี้อาจถูกลบไปแล้ว');
+        router.replace('/(tabs)');
       } finally {
         setLoading(false);
       }
@@ -41,27 +46,15 @@ export default function JoinGroupScreen() {
   }, [groupId]);
 
   const handleJoin = async () => {
-    if (!currentUser) {
-      Alert.alert('กรุณาเข้าสู่ระบบ', 'คุณต้องเข้าสู่ระบบก่อนเข้าร่วมกลุ่ม', [
-        { text: 'ตกลง', onPress: () => router.replace('/(auth)/login') }
-      ]);
-      return;
-    }
-
     try {
       setLoading(true);
-      const groupRef = doc(db, 'groups', groupId);
-      
-      // เพิ่ม UID ของผู้ใช้เข้าไปในอาเรย์ members ของกลุ่ม
-      await updateDoc(groupRef, {
-        members: arrayUnion(currentUser.uid),
-      });
+      await apiFetch(`/api/groups/${groupId}/join`, { method: 'POST' });
 
       Alert.alert('สำเร็จ', 'คุณเข้าร่วมกลุ่มเรียบร้อยแล้ว!', [
-        { text: 'ไปที่กลุ่ม', onPress: () => router.replace({ pathname: '/group-detail', params: { id: groupId } } as any) }
+        { text: 'ไปที่กลุ่ม', onPress: () => router.replace({ pathname: '/group-detail', params: { id: groupId } }) }
       ]);
-    } catch (error) {
-      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถเข้าร่วมกลุ่มได้');
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถเข้าร่วมกลุ่มได้');
     } finally {
       setLoading(false);
     }
@@ -69,31 +62,41 @@ export default function JoinGroupScreen() {
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={styles.loaderContainer}>
         <ActivityIndicator size="large" color="#468f92" />
       </View>
     );
   }
 
   return (
-    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#dbe6e5' }}>
-      <View style={{ backgroundColor: '#fff', padding: 24, borderRadius: 20, width: '100%', maxWidth: 340, alignItems: 'center', elevation: 4 }}>
-        <Text style={{ fontSize: 22, fontWeight: 'bold', color: '#1C4E4E', marginBottom: 8 }}>เข้าร่วมกลุ่ม</Text>
-        <Text style={{ fontSize: 16, color: '#334155', marginBottom: 20, textAlign: 'center' }}>
-          คุณได้รับเชิญให้เข้าร่วมกลุ่ม: <Text style={{ fontWeight: 'bold' }}>{groupInfo?.name}</Text>
+    <View style={styles.container}>
+      <View style={styles.card}>
+        <Text style={styles.heading}>เข้าร่วมกลุ่ม</Text>
+        <Text style={styles.message}>
+          คุณได้รับเชิญให้เข้าร่วมกลุ่ม: <Text style={styles.groupName}>{groupInfo?.name}</Text>
         </Text>
 
-        <TouchableOpacity
-          onPress={handleJoin}
-          style={{ backgroundColor: '#1C4E4E', width: '100%', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginBottom: 12 }}
-        >
-          <Text style={{ color: '#fff', fontWeight: 'bold', fontSize: 15 }}>ยืนยันเข้าร่วมกลุ่ม</Text>
+        <TouchableOpacity onPress={handleJoin} style={styles.confirmButton}>
+          <Text style={styles.confirmButtonText}>ยืนยันเข้าร่วมกลุ่ม</Text>
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={() => router.replace('/(tabs)')} style={{ padding: 8 }}>
-          <Text style={{ color: '#64748b', fontWeight: '600' }}>ยกเลิก</Text>
+        <TouchableOpacity onPress={() => router.replace('/(tabs)')} style={styles.cancelButton}>
+          <Text style={styles.cancelButtonText}>ยกเลิก</Text>
         </TouchableOpacity>
       </View>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, justifyContent: 'center', alignItems: 'center', padding: 20, backgroundColor: '#dbe6e5' },
+  loaderContainer: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  card: { backgroundColor: '#fff', padding: 24, borderRadius: 20, width: '100%', maxWidth: 340, alignItems: 'center', elevation: 4 },
+  heading: { fontSize: 22, fontWeight: 'bold', color: '#1C4E4E', marginBottom: 8 },
+  message: { fontSize: 16, color: '#334155', marginBottom: 20, textAlign: 'center' },
+  groupName: { fontWeight: 'bold' },
+  confirmButton: { backgroundColor: '#1C4E4E', width: '100%', paddingVertical: 14, borderRadius: 12, alignItems: 'center', marginBottom: 12 },
+  confirmButtonText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
+  cancelButton: { padding: 8 },
+  cancelButtonText: { color: '#64748b', fontWeight: '600' }
+});

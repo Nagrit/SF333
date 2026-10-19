@@ -1,25 +1,23 @@
 import { useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
-import { Bell, ChevronLeft, ChevronRight, X } from 'lucide-react-native';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Bell, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, MapPin, X } from 'lucide-react-native';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    Image,
-    Modal,
-    Platform,
-    ScrollView,
-    StatusBar,
-    Text,
-    TouchableOpacity,
-    useWindowDimensions,
-    View
+  ActivityIndicator,
+  Alert,
+  Image,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  useWindowDimensions,
+  View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-// Firebase Imports
-import { doc, setDoc } from 'firebase/firestore';
-import { auth, db } from '../../services/firebase';
+import { apiFetch } from '../../services/api';
 
 const THAI_MONTHS = [
   'มกราคม', 'กุมภาพันธ์', 'มีนาคม', 'เมษายน', 'พฤษภาคม', 'มิถุนายน',
@@ -37,6 +35,8 @@ export interface AppointmentItem {
   location: string;
   statusText: string;
   avatars: string[];
+  startAt?: string | null;
+  endAt?: string | null;
 }
 
 export interface PendingAppointmentItem {
@@ -52,164 +52,154 @@ export interface UserProfile {
   avatar: string;
 }
 
-//ส่วนสำหรับปรับแต่งสูตรคำนวณสถานะอัตโนมัติ
-const CALCULATION_CONFIG = {
-  busyThresholdPercent: 0.8,    // ถ้าสัดส่วนนัดหมายเทียบกับน้ำหนักเกณฑ์ มากกว่า 80% (0.8) จะกลายเป็น "ไม่ว่าง" (แดง)
-  maybeThresholdPercent: 0.4,   // ถ้ามากกว่า 40% (0.4) แต่ไม่ถึง 80% จะกลายเป็น "อาจจะ" (ส้ม)
-  maxDailyAppointmentsBase: 5   // สมมติฐานจำนวนนัดหมายสูงสุดต่อวันสำหรับใช้คำนวณเปอร์เซ็นต์ความหนาแน่น
+const BUSY_THRESHOLD_HOURS = 24 * 0.7; // 16.8 ชั่วโมง
+const HOUR_MS = 60 * 60 * 1000;
+
+const formatDateKey = (year: number, month: number, day: number): string => {
+  const m = String(month).padStart(2, '0');
+  const d = String(day).padStart(2, '0');
+  return `${year}-${m}-${d}`;
 };
-
-const MOCK_APPOINTMENTS: AppointmentItem[] = [
-  {
-    id: 'm1',
-    date: '2026-9-14',
-    time: '18:30 น.',
-    title: 'ชาบูกับชาวแก๊งค์ 🍲',
-    location: 'ร้าน Shabu Baru (Siam Paragon)',
-    statusText: 'ว่างครบทุกคน (5/5)',
-    avatars: [
-      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100',
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100',
-      'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100'
-    ]
-  },
-  {
-    id: 'm2',
-    date: '2026-9-14',
-    time: '18:30 น.',
-    title: 'ประชุมออนไลน์แก๊งแดกชาบูกับชาวแก๊งค์',
-    location: 'Google Meet',
-    statusText: 'ว่างครบทุกคน (5/5)',
-    avatars: [
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100',
-      'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?w=100'
-    ]
-  },
-  {
-    id: 'm3',
-    date: '2026-9-15',
-    time: '13:00 น.',
-    title: 'ประชุมวางแผนกลยุทธ์การตลาด Q4',
-    location: 'ห้องประชุมใหญ่ ชั้น 15 (True Digital Park)',
-    statusText: 'รอยืนยัน (3/5)',
-    avatars: [
-      'https://images.unsplash.com/photo-1494790108377-be9c29b29330?w=100',
-      'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'
-    ]
-  },
-  {
-    id: 'm4',
-    date: '2026-9-18',
-    time: '17:30 น.',
-    title: 'ออกกำลังกายตีแบดมินตัน',
-    location: 'สนามแบด The Court แจ้งวัฒนะ',
-    statusText: 'ว่าง 4 คน',
-    avatars: [
-      'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=100',
-      'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=100',
-      'https://images.unsplash.com/photo-1438761681033-6461ffad8d80?w=100'
-    ]
-  }
-];
-
-const MOCK_PENDING_APPOINTMENTS: PendingAppointmentItem[] = [
-  {
-    id: 'p1',
-    category: '🍔 นัดเที่ยว',
-    title: 'ทริปหัวหิน 3 วัน 2 คืน',
-    groupName: 'กลุ่ม: แก๊งแดกชาบู'
-  },
-  {
-    id: 'p2',
-    category: '🍔 นัดเที่ยว',
-    title: 'ทริปหัวหิน 3 วัน 2 คืน',
-    groupName: 'กลุ่ม: แก๊งแดกชาบู'
-  }
-];
 
 export default function IndexScreen() {
   const router = useRouter();
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
-  const currentUser = auth.currentUser;
   const scrollViewRef = useRef<ScrollView>(null);
 
+  const today = new Date();
+  const initialTodayStr = formatDateKey(today.getFullYear(), today.getMonth() + 1, today.getDate());
+
   const [userProfile, setUserProfile] = useState<UserProfile>({
-    id: currentUser?.uid || 'u1',
-    name: currentUser?.displayName || 'คุณภัทร (บอส)',
-    avatar: currentUser?.photoURL || 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=100'
+    id: '',
+    name: 'ผู้ใช้งาน',
+    avatar: 'https://picsum.photos/seed/user/100'
   });
 
   const [calendarView, setCalendarView] = useState<CalendarViewType>('month');
-  const [currentMonth, setCurrentMonth] = useState(new Date(2026, 8, 1)); 
-  const [selectedDate, setSelectedDate] = useState('2026-9-14'); 
-  
+  const [currentMonth, setCurrentMonth] = useState(new Date(today.getFullYear(), today.getMonth(), 1));
+  const [selectedDate, setSelectedDate] = useState(initialTodayStr);
+
+  const [appointments, setAppointments] = useState<AppointmentItem[]>([]);
+  const [pendingAppointments, setPendingAppointments] = useState<PendingAppointmentItem[]>([]);
   const [dateStatuses, setDateStatuses] = useState<Record<string, AppointmentStatus>>({});
-  const [isCalendarLoading, setIsCalendarLoading] = useState(false);
+
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [isSavingStatus, setIsSavingStatus] = useState(false);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<AppointmentStatus | null>(null);
 
-  // ฟังก์ชันคำนวณสถานะวัน (รองรับสูตรคำนวณตามสัดส่วนนัดหมาย)
-  const getDayStatus = (fullDate: string | null): AppointmentStatus => {
-    if (!fullDate) return 'green';
-    if (dateStatuses[fullDate]) return dateStatuses[fullDate]; // ถ้ามีการ Override ด้วยมือ
-    
-    // กรองหานัดหมายในวันนี้
-    const dayAppointments = MOCK_APPOINTMENTS.filter(item => item.date === fullDate);
-    const count = dayAppointments.length;
+  // ดึงข้อมูลทั้งหมดจาก Fastify API
+  const fetchAllData = useCallback(async () => {
+    try {
+      const [userRes, appRes, pendingRes, statusRes] = await Promise.all([
+        apiFetch<UserProfile>('/api/auth/me'),
+        apiFetch<AppointmentItem[]>('/api/appointments'),
+        apiFetch<PendingAppointmentItem[]>('/api/appointments/pending'),
+        apiFetch<Record<string, AppointmentStatus>>('/api/user-status')
+      ]);
 
-    if (count === 0) return 'green'; // ไม่มีนัด = ว่าง (เขียว)
-
-    // คำนวณสัดส่วนเทียบกับเกณฑ์ฐาน
-    const ratio = count / CALCULATION_CONFIG.maxDailyAppointmentsBase;
-
-    if (ratio >= CALCULATION_CONFIG.busyThresholdPercent) {
-      return 'red'; // มากกว่า 80% = ไม่ว่าง (แดง)
-    } else if (ratio >= CALCULATION_CONFIG.maybeThresholdPercent) {
-      return 'orange'; // มากกว่า 40% แต่ไม่ถึง 80% = อาจจะ (ส้ม)
+      if (userRes) setUserProfile(userRes);
+      if (appRes) setAppointments(appRes);
+      if (pendingRes) setPendingAppointments(pendingRes);
+      if (statusRes) setDateStatuses(statusRes);
+    } catch (error: any) {
+      console.error('Error fetching dashboard data:', error);
+    } finally {
+      setIsLoading(false);
+      setIsRefreshing(false);
     }
-    
-    return 'green';
+  }, []);
+
+  useEffect(() => {
+    fetchAllData();
+  }, [fetchAllData]);
+
+  const onRefresh = () => {
+    setIsRefreshing(true);
+    fetchAllData();
+  };
+
+  const BUSY_THRESHOLD_HOURS = 24 * 0.7; // 16.8 ชั่วโมง
+  const HOUR_MS = 60 * 60 * 1000;
+
+  const getDayStatus = (
+    fullDate: string | null
+  ): AppointmentStatus => {
+    if (!fullDate) return 'green';
+
+    // สถานะที่ผู้ใช้ตั้งเองมีสิทธิ์เหนือสถานะอัตโนมัติ
+    if (dateStatuses[fullDate]) {
+      return dateStatuses[fullDate];
+    }
+
+    const [year, month, day] = fullDate.split('-').map(Number);
+    const dayStart = new Date(year, month - 1, day).getTime();
+    const dayEnd = new Date(year, month - 1, day + 1).getTime();
+
+    const totalMs = appointments.reduce((total, item) => {
+      if (!item.startAt || !item.endAt) return total;
+
+      const start = new Date(item.startAt).getTime();
+      const end = new Date(item.endAt).getTime();
+
+      if (!Number.isFinite(start) || !Number.isFinite(end) || end <= start) {
+        return total;
+      }
+
+      // นับเฉพาะเวลานัดหมายที่ทับซ้อนกับวันที่กำลังตรวจสอบ
+      const overlapStart = Math.max(start, dayStart);
+      const overlapEnd = Math.min(end, dayEnd);
+
+      return total + Math.max(0, overlapEnd - overlapStart);
+    }, 0);
+
+    const totalHours = totalMs / HOUR_MS;
+
+    if (totalHours === 0) return 'green';
+    if (totalHours > BUSY_THRESHOLD_HOURS) return 'red';
+
+    return 'orange';
   };
 
   const getAppointmentCountForMonth = (year: number, monthIndex: number) => {
-    const targetMonthPrefix = `${year}-${monthIndex + 1}-`;
-    return MOCK_APPOINTMENTS.filter(item => item.date.startsWith(targetMonthPrefix)).length;
+    const monthStr = String(monthIndex + 1).padStart(2, '0');
+    const targetMonthPrefix = `${year}-${monthStr}-`;
+    return appointments.filter(item => item.date.startsWith(targetMonthPrefix)).length;
   };
 
   const filteredAppointments = useMemo(() => {
-    return MOCK_APPOINTMENTS.filter(item => item.date === selectedDate);
-  }, [selectedDate]);
+    const [year, month, day] = selectedDate.split('-').map(Number);
+    const dayStart = new Date(year, month - 1, day).getTime();
+    const dayEnd = new Date(year, month - 1, day + 1).getTime();
 
-  useEffect(() => {
-    const loadUserData = async () => {
-      try {
-        const savedUserInfo = await SecureStore.getItemAsync('userInfo');
-        if (savedUserInfo) {
-          const parsed = JSON.parse(savedUserInfo);
-          setUserProfile(prev => ({
-            ...prev,
-            name: parsed.name || prev.name,
-            avatar: parsed.avatar || prev.avatar,
-          }));
-        }
-      } catch (e) {
-        console.log('Error loading user profile:', e);
+    return appointments.filter((item) => {
+      if (!item.startAt || !item.endAt) {
+        return item.date === selectedDate;
       }
-    };
-    loadUserData();
-  }, [currentUser]);
+
+      const start = new Date(item.startAt).getTime();
+      const end = new Date(item.endAt).getTime();
+
+      if (!Number.isFinite(start) || !Number.isFinite(end)) {
+        return item.date === selectedDate;
+      }
+
+      return start < dayEnd && end > dayStart;
+    });
+  }, [appointments, selectedDate]);
 
   const handleSelectDate = (fullDate: string) => {
     setSelectedDate(fullDate);
-    scrollViewRef.current?.scrollTo({ y: 450, animated: true });
+    scrollViewRef.current?.scrollTo({ y: 380, animated: true });
   };
 
+  // บันทึกสถานะวันด้วย Fastify API
   const handleSaveStatus = async () => {
     const previousStatuses = { ...dateStatuses };
     const newStatuses = { ...dateStatuses };
-    
+
     if (selectedStatus) {
       newStatuses[selectedDate] = selectedStatus;
     } else {
@@ -219,18 +209,18 @@ export default function IndexScreen() {
     setDateStatuses(newStatuses);
     setIsStatusModalOpen(false);
 
-    if (!currentUser?.uid) return;
     try {
       setIsSavingStatus(true);
-      const statusDocRef = doc(db, 'users', currentUser.uid, 'user_statuses', selectedDate);
-      await setDoc(statusDocRef, {
-        date: selectedDate,
-        status: selectedStatus,
-        updatedAt: new Date().toISOString()
+      await apiFetch('/api/user-status', {
+        method: 'POST',
+        body: JSON.stringify({
+          date: selectedDate,
+          status: selectedStatus
+        })
       });
-    } catch (error) {
+    } catch (error: any) {
       setDateStatuses(previousStatuses);
-      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกสถานะได้');
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกสถานะได้ กรุณาลองใหม่อีกครั้ง');
     } finally {
       setIsSavingStatus(false);
     }
@@ -246,7 +236,8 @@ export default function IndexScreen() {
     if (calendarView === 'week') {
       const [y, m, d] = selectedDate.split('-').map(Number);
       const prevW = new Date(y, m - 1, d - 7);
-      setSelectedDate(`${prevW.getFullYear()}-${prevW.getMonth() + 1}-${prevW.getDate()}`);
+      const formatted = formatDateKey(prevW.getFullYear(), prevW.getMonth() + 1, prevW.getDate());
+      setSelectedDate(formatted);
       setCurrentMonth(new Date(prevW.getFullYear(), prevW.getMonth(), 1));
     } else if (calendarView === 'year') {
       setCurrentMonth(prev => new Date(prev.getFullYear() - 1, prev.getMonth(), 1));
@@ -259,7 +250,8 @@ export default function IndexScreen() {
     if (calendarView === 'week') {
       const [y, m, d] = selectedDate.split('-').map(Number);
       const nextW = new Date(y, m - 1, d + 7);
-      setSelectedDate(`${nextW.getFullYear()}-${nextW.getMonth() + 1}-${nextW.getDate()}`);
+      const formatted = formatDateKey(nextW.getFullYear(), nextW.getMonth() + 1, nextW.getDate());
+      setSelectedDate(formatted);
       setCurrentMonth(new Date(nextW.getFullYear(), nextW.getMonth(), 1));
     } else if (calendarView === 'year') {
       setCurrentMonth(prev => new Date(prev.getFullYear() + 1, prev.getMonth(), 1));
@@ -277,26 +269,26 @@ export default function IndexScreen() {
     const days = [];
     for (let i = 0; i < firstDay; i++) days.push({ date: '', status: null, fullDate: null });
     for (let i = 1; i <= daysInMonth; i++) {
-      const fullDate = `${year}-${month + 1}-${i}`;
+      const fullDate = formatDateKey(year, month + 1, i);
       days.push({ date: i.toString(), status: getDayStatus(fullDate), fullDate });
     }
     return days;
-  }, [currentMonth, dateStatuses]);
+  }, [currentMonth, dateStatuses, appointments]);
 
   const weeklyDays = useMemo(() => {
     if (!selectedDate) return [];
     const [y, m, d] = selectedDate.split('-').map(Number);
     const curr = new Date(y, m - 1, d);
     const firstDayOfWeek = new Date(curr.getFullYear(), curr.getMonth(), curr.getDate() - curr.getDay());
-    
+
     const days = [];
     for (let i = 0; i < 7; i++) {
       const day = new Date(firstDayOfWeek.getFullYear(), firstDayOfWeek.getMonth(), firstDayOfWeek.getDate() + i);
-      const fullDate = `${day.getFullYear()}-${day.getMonth() + 1}-${day.getDate()}`;
+      const fullDate = formatDateKey(day.getFullYear(), day.getMonth() + 1, day.getDate());
       days.push({ date: day.getDate().toString(), status: getDayStatus(fullDate), fullDate, dayObj: day });
     }
     return days;
-  }, [selectedDate, dateStatuses]);
+  }, [selectedDate, dateStatuses, appointments]);
 
   const renderWeekHeader = () => {
     if (weeklyDays.length < 7) return null;
@@ -312,43 +304,61 @@ export default function IndexScreen() {
     }
 
     return (
-      <View style={{ alignItems: 'flex-start', flex: 1, paddingLeft: 10 }}>
-        <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 2 }}>สัปดาห์ที่ {weekOfMonth} ของเดือน</Text>
-        <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#4a3b32' }}>{rangeText}</Text>
+      <View style={styles.weekHeaderBox}>
+        <Text style={styles.weekHeaderSubtext}>สัปดาห์ที่ {weekOfMonth} ของเดือน</Text>
+        <Text style={styles.weekHeaderTitle}>{rangeText}</Text>
       </View>
     );
   };
 
-  // ฟังก์ชันเลือกสีจุดสถานะตามค่า type
   const getDotColor = (status: AppointmentStatus | null) => {
     if (status === 'red') return '#f87171';
     if (status === 'orange') return '#e08955';
     return '#4ade80';
   };
 
-  return (
-    <View style={{ flex: 1, backgroundColor: '#cce1de' }}>
-      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
+  const formatSelectedDateText = (dateStr: string) => {
+    if (!dateStr) return '';
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return `${d} ${THAI_MONTHS[m - 1]} ${y}`;
+  };
 
-      <ScrollView ref={scrollViewRef} showsVerticalScrollIndicator={false} overScrollMode="never">
+  if (isLoading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#468f92" />
+      </View>
+    );
+  }
+
+  return (
+    <View style={styles.container}>
+      <StatusBar barStyle="light-content" backgroundColor="transparent" translucent />
+
+      <ScrollView
+        ref={scrollViewRef}
+        showsVerticalScrollIndicator={false}
+        overScrollMode="never"
+        refreshControl={<RefreshControl refreshing={isRefreshing} onRefresh={onRefresh} tintColor="#468f92" />}
+      >
         {/* Top Header */}
-        <View style={{ backgroundColor: '#468f92', paddingHorizontal: 20, paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12, paddingBottom: 40, borderBottomLeftRadius: 28, borderBottomRightRadius: 28 }}>
-          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
-            <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-              <Image source={{ uri: userProfile.avatar }} style={{ width: 44, height: 44, borderRadius: 22, borderWidth: 2, borderColor: '#ffffff', marginRight: 10 }} />
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12 }]}>
+          <View style={styles.headerRow}>
+            <View style={styles.userRow}>
+              <Image source={{ uri: userProfile.avatar }} style={styles.avatar} />
               <View>
-                <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 11, fontWeight: '500' }}>Welcome back,</Text>
-                <Text style={{ color: '#ffffff', fontSize: 15, fontWeight: 'bold' }}>{userProfile.name}</Text>
+                <Text style={styles.welcomeText}>Welcome back,</Text>
+                <Text style={styles.userNameText}>{userProfile.name}</Text>
               </View>
             </View>
-            <TouchableOpacity onPress={() => router.push('/notifications')} style={{ width: 38, height: 38, borderRadius: 19, backgroundColor: '#ffffff', alignItems: 'center', justifyContent: 'center' }}>
+            <TouchableOpacity onPress={() => router.push('/notifications')} style={styles.bellButton} activeOpacity={0.8}>
               <Bell color="#e08955" size={20} />
             </TouchableOpacity>
           </View>
         </View>
 
         {/* Tab Switcher */}
-        <View style={{ marginHorizontal: 16, marginTop: -20, backgroundColor: '#ffffff', borderRadius: 24, padding: 4, flexDirection: 'row', elevation: 4, shadowColor: '#000', shadowOffset: { width: 0, height: 2 }, shadowOpacity: 0.1, shadowRadius: 8 }}>
+        <View style={styles.tabContainer}>
           {[
             { key: 'week', label: 'รายสัปดาห์' },
             { key: 'month', label: 'รายเดือน' },
@@ -357,59 +367,66 @@ export default function IndexScreen() {
             <TouchableOpacity
               key={tab.key}
               onPress={() => setCalendarView(tab.key as CalendarViewType)}
-              style={{ flex: 1, paddingVertical: 10, borderRadius: 20, backgroundColor: calendarView === tab.key ? '#609a96' : 'transparent', alignItems: 'center' }}
+              style={[
+                styles.tabButton,
+                calendarView === tab.key && styles.tabButtonActive
+              ]}
+              activeOpacity={0.8}
             >
-              <Text style={{ color: calendarView === tab.key ? '#ffffff' : '#6b7280', fontSize: 13, fontWeight: 'bold' }}>{tab.label}</Text>
+              <Text style={[styles.tabText, calendarView === tab.key && styles.tabTextActive]}>
+                {tab.label}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
 
-        {/* Calendar Area */}
-        <View style={{ marginHorizontal: 16, marginTop: 16, backgroundColor: '#ffffff', borderRadius: 24, padding: 16, elevation: 3 }}>
-          
-          <View style={{ flexDirection: 'row', justifyContent: calendarView === 'week' ? 'flex-start' : 'center', alignItems: 'center', marginBottom: 16, position: 'relative' }}>
-            <TouchableOpacity onPress={handlePrev} style={{ zIndex: 1, padding: 4, position: calendarView === 'week' ? 'relative' : 'absolute', left: 0 }}>
+        {/* Calendar Card */}
+        <View style={styles.calendarCard}>
+          <View style={[styles.calendarHeader, calendarView === 'week' && styles.calendarHeaderLeft]}>
+            <TouchableOpacity onPress={handlePrev} style={styles.navButton}>
               <ChevronLeft color="#4a3b32" size={20} />
             </TouchableOpacity>
-            
+
             {calendarView === 'week' ? (
               renderWeekHeader()
             ) : (
-              <TouchableOpacity 
-                onPress={() => setCalendarView('year')} 
-                style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}
+              <TouchableOpacity
+                onPress={() => setCalendarView('year')}
+                style={styles.monthSelector}
                 activeOpacity={0.7}
               >
-                <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#4a3b32' }}>
-                  {calendarView === 'year' 
-                    ? currentMonth.getFullYear() 
+                <Text style={styles.monthTitle}>
+                  {calendarView === 'year'
+                    ? currentMonth.getFullYear()
                     : `${THAI_MONTHS[currentMonth.getMonth()]} ${currentMonth.getFullYear()}`}
                 </Text>
-                {isCalendarLoading && <ActivityIndicator size="small" color="#468f92" />}
               </TouchableOpacity>
             )}
-            
-            <TouchableOpacity onPress={handleNext} style={{ zIndex: 1, padding: 4, position: calendarView === 'week' ? 'relative' : 'absolute', right: 0 }}>
+
+            <TouchableOpacity onPress={handleNext} style={styles.navButton}>
               <ChevronRight color="#4a3b32" size={20} />
             </TouchableOpacity>
           </View>
 
           {/* มุมมองรายปี */}
           {calendarView === 'year' && (
-            <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'space-between' }}>
+            <View style={styles.yearGrid}>
               {THAI_MONTHS.map((month, idx) => {
                 const count = getAppointmentCountForMonth(currentMonth.getFullYear(), idx);
                 return (
-                  <TouchableOpacity 
-                    key={month} 
-                    onPress={() => { 
-                      setCurrentMonth(new Date(currentMonth.getFullYear(), idx, 1)); 
-                      setCalendarView('month'); 
-                    }} 
-                    style={{ width: '31%', borderWidth: 1, borderColor: count > 0 ? '#468f92' : '#e5e7eb', borderRadius: 12, paddingVertical: 14, alignItems: 'center', marginBottom: 12, backgroundColor: count > 0 ? 'rgba(70, 143, 146, 0.05)' : '#f9fafb' }}
+                  <TouchableOpacity
+                    key={month}
+                    onPress={() => {
+                      setCurrentMonth(new Date(currentMonth.getFullYear(), idx, 1));
+                      setCalendarView('month');
+                    }}
+                    style={[
+                      styles.yearMonthCard,
+                      count > 0 && styles.yearMonthCardActive
+                    ]}
                   >
-                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 2 }}>{month}</Text>
-                    <Text style={{ fontSize: 10, color: count > 0 ? '#e08955' : '#4ade80', fontWeight: '600' }}>
+                    <Text style={styles.yearMonthText}>{month}</Text>
+                    <Text style={[styles.yearMonthSubtext, count > 0 && styles.yearMonthSubtextActive]}>
                       {count > 0 ? `${count} นัดหมาย` : 'ว่าง'}
                     </Text>
                   </TouchableOpacity>
@@ -418,50 +435,62 @@ export default function IndexScreen() {
             </View>
           )}
 
-          {/* รายเดือน และ รายสัปดาห์ */}
+          {/* มุมมองรายเดือน / รายสัปดาห์ */}
           {calendarView !== 'year' && (
             <>
-              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+              <View style={styles.weekDaysHeader}>
                 {['อา', 'จ', 'อ', 'พ', 'พฤ', 'ศ', 'ส'].map((day, i) => (
-                  <View key={i} style={{ width: '14.28%', alignItems: 'center' }}>
-                    <Text style={{ fontSize: 11, fontWeight: 'bold', color: i === 0 ? '#e08955' : '#4a3b32' }}>{day}</Text>
+                  <View key={i} style={styles.weekDayCol}>
+                    <Text style={[styles.weekDayText, i === 0 && styles.sundayText]}>{day}</Text>
                   </View>
                 ))}
               </View>
-              <View style={{ height: 1, backgroundColor: '#8c7365', opacity: 0.3, marginBottom: 8 }} />
-              
-              <View style={{ flexDirection: 'row', flexWrap: 'wrap' }}>
+
+              <View style={styles.divider} />
+
+              <View style={styles.daysGrid}>
                 {(calendarView === 'month' ? calendarDays : weeklyDays).map((d, i) => {
                   const todayObj = new Date();
-                  const todayString = `${todayObj.getFullYear()}-${todayObj.getMonth() + 1}-${todayObj.getDate()}`;
+                  const todayString = formatDateKey(todayObj.getFullYear(), todayObj.getMonth() + 1, todayObj.getDate());
                   const isToday = d.fullDate === todayString;
+                  const isSelected = d.fullDate === selectedDate;
 
                   return (
-                    <View key={i} style={{ width: '14.28%', height: 42, alignItems: 'center', justifyContent: 'flex-start', paddingTop: 2 }}>
+                    <View key={i} style={styles.dayCell}>
                       {d.fullDate && (
                         <TouchableOpacity
                           onPress={() => handleSelectDate(d.fullDate!)}
                           onLongPress={() => handleOpenStatusModal(d.fullDate!)}
-                          style={{ alignItems: 'center', justifyContent: 'center', width: 28, height: 28, borderRadius: 6, backgroundColor: d.fullDate === selectedDate ? '#b5d5d0' : 'transparent' }}
+                          style={[styles.dayButton, isSelected && styles.dayButtonSelected]}
+                          activeOpacity={0.7}
                         >
-                          <Text style={{ fontSize: 12, fontWeight: 'bold', color: isToday ? '#e08955' : '#4a3b32' }}>
+                          <Text style={[styles.dayText, isToday && styles.todayText]}>
                             {d.date}
                           </Text>
-                          {/* จุดแสดงสถานะ (เขียว, ส้ม, แดง) */}
-                          <View style={{ width: 4, height: 4, borderRadius: 2, marginTop: 2, backgroundColor: getDotColor(d.status) }} />
+                          <View style={[styles.statusDot, { backgroundColor: getDotColor(d.status) }]} />
                         </TouchableOpacity>
                       )}
                     </View>
                   );
                 })}
               </View>
-              <View style={{ height: 1, backgroundColor: '#8c7365', opacity: 0.3, marginVertical: 12 }} />
-              
+
+              <View style={styles.divider} />
+
               {/* Legend คำอธิบายจุดสี */}
-              <View style={{ flexDirection: 'row', justifyContent: 'space-around', paddingHorizontal: 4 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}><View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#4ade80', marginRight: 4 }} /><Text style={{ fontSize: 9, color: '#4a3b32', fontWeight: 'bold' }}>ว่าง</Text></View>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}><View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#e08955', marginRight: 4 }} /><Text style={{ fontSize: 9, color: '#4a3b32', fontWeight: 'bold' }}>อาจจะ</Text></View>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}><View style={{ width: 7, height: 7, borderRadius: 3.5, backgroundColor: '#f87171', marginRight: 4 }} /><Text style={{ fontSize: 9, color: '#4a3b32', fontWeight: 'bold' }}>ไม่ว่าง</Text></View>
+              <View style={styles.legendContainer}>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, styles.dotGreen]} />
+                  <Text style={styles.legendText}>ว่าง</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, styles.dotOrange]} />
+                  <Text style={styles.legendText}>อาจจะ</Text>
+                </View>
+                <View style={styles.legendItem}>
+                  <View style={[styles.legendDot, styles.dotRed]} />
+                  <Text style={styles.legendText}>ไม่ว่าง</Text>
+                </View>
               </View>
             </>
           )}
@@ -469,31 +498,30 @@ export default function IndexScreen() {
 
         {/* นัดหมายที่รอยืนยัน / โหวตเวลา */}
         {calendarView !== 'year' && (
-          <View style={{ marginHorizontal: 16, marginTop: 16, backgroundColor: '#fff7ed', borderWidth: 1.5, borderColor: '#fed7aa', borderRadius: 24, padding: 14, elevation: 2 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-              <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#c2410c' }}>
-                นัดหมายที่รอยืนยัน / โหวตเวลา
-              </Text>
-              <View style={{ backgroundColor: '#ffedd5', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 10 }}>
-                <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#c2410c' }}>ยังไม่ได้ลงปฏิทิน 2</Text>
+          <View style={styles.pendingCard}>
+            <View style={styles.pendingHeader}>
+              <Text style={styles.pendingTitle}>นัดหมายที่รอยืนยัน / โหวตเวลา</Text>
+              <View style={styles.pendingBadge}>
+                <Text style={styles.pendingBadgeText}>ยังไม่ได้ลงปฏิทิน {pendingAppointments.length}</Text>
               </View>
             </View>
-            <Text style={{ fontSize: 10, color: '#9a3412', marginBottom: 12 }}>
+            <Text style={styles.pendingSubtitle}>
               นัดหมายเหล่านี้ยังรอโหวตเคาะวัน เมื่อยืนยันแล้วจะปรากฏในปฏิทินทันที
             </Text>
 
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 10 }}>
-              {MOCK_PENDING_APPOINTMENTS.map((item) => (
-                <View key={item.id} style={{ width: 210, backgroundColor: '#ffffff', borderRadius: 18, padding: 12, borderWidth: 1, borderColor: '#fed7aa', elevation: 1 }}>
-                  <Text style={{ fontSize: 11, fontWeight: 'bold', color: '#c2410c', marginBottom: 2 }}>{item.category}</Text>
-                  <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#1f2937', marginBottom: 2 }}>{item.title}</Text>
-                  <Text style={{ fontSize: 10, color: '#6b7280', marginBottom: 10 }}>{item.groupName}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.pendingHorizontalList}>
+              {pendingAppointments.map((item) => (
+                <View key={item.id} style={styles.pendingItem}>
+                  <Text style={styles.pendingCategory}>{item.category}</Text>
+                  <Text style={styles.pendingItemTitle} numberOfLines={1}>{item.title}</Text>
+                  <Text style={styles.pendingGroupName}>{item.groupName}</Text>
 
-                  <TouchableOpacity 
-                    style={{ backgroundColor: '#f97316', borderRadius: 12, paddingVertical: 8, alignItems: 'center' }}
-                    onPress={() => Alert.alert('ร่วมโหวต', `คุณกำลังไปหน้าโหวตของ: ${item.title}`)}
+                  <TouchableOpacity
+                    style={styles.voteButton}
+                    onPress={() => router.push({ pathname: '/vote-appointment', params: { id: item.id } })}
+                    activeOpacity={0.8}
                   >
-                    <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 11 }}>ร่วมโหวต / เคาะวัน</Text>
+                    <Text style={styles.voteButtonText}>ร่วมโหวต / เคาะวัน</Text>
                   </TouchableOpacity>
                 </View>
               ))}
@@ -503,43 +531,52 @@ export default function IndexScreen() {
 
         {/* รายการนัดหมายประจำวัน */}
         {calendarView !== 'year' && (
-          <View style={{ paddingHorizontal: 20, paddingTop: 16, paddingBottom: 24 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
-              <Text style={{ fontSize: 15, fontWeight: 'bold', color: '#374151' }}>
-                นัดหมายวันที่ ({selectedDate ? `${selectedDate.split('-')[2]} ${THAI_MONTHS[parseInt(selectedDate.split('-')[1]) - 1]}` : ''})
+          <View style={styles.dailySection}>
+            <View style={styles.dailySectionHeader}>
+              <Text style={styles.dailySectionTitle}>
+                นัดหมายวันที่ {formatSelectedDateText(selectedDate)}
               </Text>
               <TouchableOpacity onPress={() => router.push('/schedules')}>
-                <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280' }}>ดูทั้งหมด</Text>
+                <Text style={styles.seeAllText}>ดูทั้งหมด</Text>
               </TouchableOpacity>
             </View>
 
             {filteredAppointments.length === 0 ? (
-              <View style={{ backgroundColor: '#ffffff', borderRadius: 16, padding: 20, alignItems: 'center' }}>
-                <Text style={{ color: '#9ca3af', fontSize: 13 }}>ไม่มีนัดหมายในวันนี้</Text>
+              <View style={styles.emptyContainer}>
+                <CalendarIcon size={32} color="#cbd5e1" style={styles.emptyIcon} />
+                <Text style={styles.emptyText}>ไม่มีนัดหมายในวันนี้</Text>
               </View>
             ) : (
               filteredAppointments.map((item) => (
                 <TouchableOpacity
                   key={item.id}
                   onPress={() => router.push({ pathname: '/appointment-detail', params: { id: item.id } })}
-                  activeOpacity={0.8}
-                  style={{ flexDirection: 'row', marginBottom: 12, alignItems: 'center' }}
+                  activeOpacity={0.85}
+                  style={styles.appointmentCard}
                 >
-                  <View style={{ backgroundColor: '#ffffff', borderRadius: 16, paddingVertical: 14, paddingHorizontal: 12, marginRight: 10, width: 90, alignItems: 'center', justifyContent: 'center', elevation: 1 }}>
-                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151' }}>{item.time}</Text>
+                  <View style={styles.timeBadge}>
+                    <Clock size={12} color="#4b5563" style={styles.clockIcon} />
+                    <Text style={styles.timeText}>{item.time}</Text>
                   </View>
 
-                  <View style={{ flex: 1, backgroundColor: '#ffffff', borderRadius: 18, padding: 12, elevation: 1 }}>
-                    <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', marginBottom: 2 }}>{item.title}</Text>
-                    <Text style={{ fontSize: 10, color: '#9ca3af', marginBottom: 8 }}>{item.location}</Text>
+                  <View style={styles.appointmentDetails}>
+                    <Text style={styles.appointmentTitle}>{item.title}</Text>
+                    <View style={styles.locationRow}>
+                      <MapPin size={11} color="#9ca3af" style={styles.mapIcon} />
+                      <Text style={styles.locationText} numberOfLines={1}>{item.location}</Text>
+                    </View>
 
-                    <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                    <View style={styles.appointmentFooter}>
+                      <View style={styles.avatarStack}>
                         {item.avatars.map((url, idx) => (
-                          <Image key={idx} source={{ uri: url }} style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#ffffff', marginLeft: idx === 0 ? 0 : -6 }} />
+                          <Image
+                            key={idx}
+                            source={{ uri: url }}
+                            style={[styles.stackedAvatar, { marginLeft: idx === 0 ? 0 : -8 }]}
+                          />
                         ))}
                       </View>
-                      <Text style={{ fontSize: 9, fontWeight: 'bold', color: '#217371' }}>{item.statusText}</Text>
+                      <Text style={styles.statusText}>{item.statusText}</Text>
                     </View>
                   </View>
                 </TouchableOpacity>
@@ -551,49 +588,65 @@ export default function IndexScreen() {
 
       {/* Modal กำหนดสถานะ */}
       <Modal visible={isStatusModalOpen} transparent animationType="fade">
-        <View style={{ flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'center', alignItems: 'center', padding: 16 }}>
-          <View style={{ backgroundColor: '#ffffff', borderRadius: 20, padding: 20, width: '100%', maxWidth: 320 }}>
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
-              <Text style={{ fontWeight: 'bold', color: '#1f2937', fontSize: 14 }}>
-                กำหนดสถานะ {selectedDate ? `${selectedDate.split('-')[2]} ${THAI_MONTHS[parseInt(selectedDate.split('-')[1]) - 1]}` : ''}
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                กำหนดสถานะ {formatSelectedDateText(selectedDate)}
               </Text>
               <TouchableOpacity onPress={() => setIsStatusModalOpen(false)}>
                 <X color="#9ca3af" size={20} />
               </TouchableOpacity>
             </View>
 
-            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+            <View style={styles.modalOptions}>
               <TouchableOpacity
                 onPress={() => setSelectedStatus(selectedStatus === 'green' ? null : 'green')}
-                style={{ flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 2, alignItems: 'center', borderColor: selectedStatus === 'green' ? '#4ade80' : '#f3f4f6', backgroundColor: selectedStatus === 'green' ? 'rgba(74, 222, 128, 0.1)' : '#f9fafb' }}
+                style={[
+                  styles.statusOption,
+                  selectedStatus === 'green' && styles.statusOptionGreen
+                ]}
               >
-                <Text style={{ fontWeight: 'bold', fontSize: 12, color: selectedStatus === 'green' ? '#4ade80' : '#9ca3af' }}>ว่าง</Text>
+                <Text style={[styles.statusOptionText, selectedStatus === 'green' && styles.textGreen]}>
+                  ว่าง
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={() => setSelectedStatus(selectedStatus === 'orange' ? null : 'orange')}
-                style={{ flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 2, alignItems: 'center', borderColor: selectedStatus === 'orange' ? '#e08955' : '#f3f4f6', backgroundColor: selectedStatus === 'orange' ? 'rgba(224, 137, 85, 0.1)' : '#f9fafb' }}
+                style={[
+                  styles.statusOption,
+                  selectedStatus === 'orange' && styles.statusOptionOrange
+                ]}
               >
-                <Text style={{ fontWeight: 'bold', fontSize: 12, color: selectedStatus === 'orange' ? '#e08955' : '#9ca3af' }}>อาจจะ</Text>
+                <Text style={[styles.statusOptionText, selectedStatus === 'orange' && styles.textOrange]}>
+                  อาจจะ
+                </Text>
               </TouchableOpacity>
 
               <TouchableOpacity
                 onPress={() => setSelectedStatus(selectedStatus === 'red' ? null : 'red')}
-                style={{ flex: 1, paddingVertical: 10, borderRadius: 8, borderWidth: 2, alignItems: 'center', borderColor: selectedStatus === 'red' ? '#f87171' : '#f3f4f6', backgroundColor: selectedStatus === 'red' ? 'rgba(248, 113, 113, 0.1)' : '#f9fafb' }}
+                style={[
+                  styles.statusOption,
+                  selectedStatus === 'red' && styles.statusOptionRed
+                ]}
               >
-                <Text style={{ fontWeight: 'bold', fontSize: 12, color: selectedStatus === 'red' ? '#f87171' : '#9ca3af' }}>ไม่ว่าง</Text>
+                <Text style={[styles.statusOptionText, selectedStatus === 'red' && styles.textRed]}>
+                  ไม่ว่าง
+                </Text>
               </TouchableOpacity>
             </View>
 
             <TouchableOpacity
               onPress={handleSaveStatus}
               disabled={isSavingStatus}
-              style={{ backgroundColor: '#468f92', paddingVertical: 12, borderRadius: 8, alignItems: 'center' }}
+              style={styles.saveStatusButton}
+              activeOpacity={0.8}
             >
               {isSavingStatus ? (
                 <ActivityIndicator color="#ffffff" size="small" />
               ) : (
-                <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 12 }}>บันทึกสถานะ</Text>
+                <Text style={styles.saveStatusText}>บันทึกสถานะ</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -602,3 +655,501 @@ export default function IndexScreen() {
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#cce1de',
+  },
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: '#cce1de',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  header: {
+    backgroundColor: '#468f92',
+    paddingHorizontal: 20,
+    paddingBottom: 40,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  userRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  avatar: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    marginRight: 10,
+  },
+  welcomeText: {
+    color: 'rgba(255,255,255,0.8)',
+    fontSize: 11,
+    fontWeight: '500',
+  },
+  userNameText: {
+    color: '#ffffff',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  bellButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  tabContainer: {
+    marginHorizontal: 16,
+    marginTop: -20,
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 4,
+    flexDirection: 'row',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 20,
+    backgroundColor: 'transparent',
+    alignItems: 'center',
+  },
+  tabButtonActive: {
+    backgroundColor: '#609a96',
+  },
+  tabText: {
+    color: '#6b7280',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  tabTextActive: {
+    color: '#ffffff',
+  },
+  calendarCard: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    backgroundColor: '#ffffff',
+    borderRadius: 24,
+    padding: 16,
+    elevation: 3,
+  },
+  calendarHeader: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  calendarHeaderLeft: {
+    justifyContent: 'flex-start',
+  },
+  navButton: {
+    padding: 6,
+  },
+  weekHeaderBox: {
+    alignItems: 'flex-start',
+    flex: 1,
+    paddingLeft: 10,
+  },
+  weekHeaderSubtext: {
+    fontSize: 11,
+    color: '#6b7280',
+    marginBottom: 2,
+  },
+  weekHeaderTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#4a3b32',
+  },
+  monthSelector: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  monthTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: '#4a3b32',
+  },
+  yearGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+  },
+  yearMonthCard: {
+    width: '31%',
+    borderWidth: 1,
+    borderColor: '#e5e7eb',
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginBottom: 12,
+    backgroundColor: '#f9fafb',
+  },
+  yearMonthCardActive: {
+    borderColor: '#468f92',
+    backgroundColor: 'rgba(70, 143, 146, 0.05)',
+  },
+  yearMonthText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#374151',
+    marginBottom: 2,
+  },
+  yearMonthSubtext: {
+    fontSize: 10,
+    color: '#4ade80',
+    fontWeight: '600',
+  },
+  yearMonthSubtextActive: {
+    color: '#e08955',
+  },
+  weekDaysHeader: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  weekDayCol: {
+    width: '14.28%',
+    alignItems: 'center',
+  },
+  weekDayText: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#4a3b32',
+  },
+  sundayText: {
+    color: '#e08955',
+  },
+  divider: {
+    height: 1,
+    backgroundColor: '#e5e7eb',
+    marginVertical: 8,
+  },
+  daysGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  dayCell: {
+    width: '14.28%',
+    height: 42,
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    paddingTop: 2,
+  },
+  dayButton: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 28,
+    height: 28,
+    borderRadius: 6,
+    backgroundColor: 'transparent',
+  },
+  dayButtonSelected: {
+    backgroundColor: '#b5d5d0',
+  },
+  dayText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#4a3b32',
+  },
+  todayText: {
+    color: '#e08955',
+  },
+  statusDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    marginTop: 2,
+  },
+  legendContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    paddingHorizontal: 4,
+    paddingTop: 4,
+  },
+  legendItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  legendDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    marginRight: 4,
+  },
+  dotGreen: { backgroundColor: '#4ade80' },
+  dotOrange: { backgroundColor: '#e08955' },
+  dotRed: { backgroundColor: '#f87171' },
+  legendText: {
+    fontSize: 9,
+    color: '#4a3b32',
+    fontWeight: 'bold',
+  },
+  pendingCard: {
+    marginHorizontal: 16,
+    marginTop: 16,
+    backgroundColor: '#fff7ed',
+    borderWidth: 1.5,
+    borderColor: '#fed7aa',
+    borderRadius: 24,
+    padding: 14,
+    elevation: 2,
+  },
+  pendingHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  pendingTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#c2410c',
+  },
+  pendingBadge: {
+    backgroundColor: '#ffedd5',
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+  },
+  pendingBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#c2410c',
+  },
+  pendingSubtitle: {
+    fontSize: 10,
+    color: '#9a3412',
+    marginBottom: 12,
+  },
+  pendingHorizontalList: {
+    gap: 10,
+  },
+  pendingItem: {
+    width: 210,
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 12,
+    borderWidth: 1,
+    borderColor: '#fed7aa',
+    elevation: 1,
+  },
+  pendingCategory: {
+    fontSize: 11,
+    fontWeight: 'bold',
+    color: '#c2410c',
+    marginBottom: 2,
+  },
+  pendingItemTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#1f2937',
+    marginBottom: 2,
+  },
+  pendingGroupName: {
+    fontSize: 10,
+    color: '#6b7280',
+    marginBottom: 10,
+  },
+  voteButton: {
+    backgroundColor: '#f97316',
+    borderRadius: 12,
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  voteButtonText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+    fontSize: 11,
+  },
+  dailySection: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 24,
+  },
+  dailySectionHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  dailySectionTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#374151',
+  },
+  seeAllText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#6b7280',
+  },
+  emptyContainer: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyIcon: {
+    marginBottom: 8,
+  },
+  emptyText: {
+    color: '#9ca3af',
+    fontSize: 13,
+  },
+  appointmentCard: {
+    flexDirection: 'row',
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  timeBadge: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
+    paddingVertical: 14,
+    paddingHorizontal: 10,
+    marginRight: 10,
+    width: 86,
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 1,
+  },
+  clockIcon: {
+    marginBottom: 4,
+  },
+  timeText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#374151',
+  },
+  appointmentDetails: {
+    flex: 1,
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 12,
+    elevation: 1,
+  },
+  appointmentTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#374151',
+    marginBottom: 2,
+  },
+  locationRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  mapIcon: {
+    marginRight: 4,
+  },
+  locationText: {
+    fontSize: 10,
+    color: '#9ca3af',
+    flex: 1,
+  },
+  appointmentFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  avatarStack: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  stackedAvatar: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+  },
+  statusText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    color: '#217371',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalContent: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
+    padding: 20,
+    width: '100%',
+    maxWidth: 320,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontWeight: 'bold',
+    color: '#1f2937',
+    fontSize: 13,
+  },
+  modalOptions: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 16,
+  },
+  statusOption: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 8,
+    borderWidth: 2,
+    alignItems: 'center',
+    borderColor: '#f3f4f6',
+    backgroundColor: '#f9fafb',
+  },
+  statusOptionGreen: {
+    borderColor: '#4ade80',
+    backgroundColor: 'rgba(74, 222, 128, 0.1)',
+  },
+  statusOptionOrange: {
+    borderColor: '#e08955',
+    backgroundColor: 'rgba(224, 137, 85, 0.1)',
+  },
+  statusOptionRed: {
+    borderColor: '#f87171',
+    backgroundColor: 'rgba(248, 113, 113, 0.1)',
+  },
+  statusOptionText: {
+    fontWeight: 'bold',
+    fontSize: 12,
+    color: '#9ca3af',
+  },
+  textGreen: { color: '#4ade80' },
+  textOrange: { color: '#e08955' },
+  textRed: { color: '#f87171' },
+  saveStatusButton: {
+    backgroundColor: '#468f92',
+    paddingVertical: 12,
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  saveStatusText: {
+    color: '#ffffff',
+    fontWeight: 'bold',
+    fontSize: 12,
+  },
+});
