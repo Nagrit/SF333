@@ -5,20 +5,23 @@ import {
   ActivityIndicator,
   Alert,
   Image,
+  KeyboardAvoidingView,
   Platform,
   ScrollView,
   StatusBar,
-  StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
-  View
+  View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-// Firebase Auth Imports
-import { sendPasswordResetEmail } from 'firebase/auth';
-import { auth } from '../../services/firebase';
+import { apiFetch } from '../../services/api';
+
+// กำหนด Interface สำหรับข้อมูล Response จาก Forgot Password API
+export interface ForgotPasswordResponse {
+  message?: string;
+}
 
 export default function ForgotPasswordScreen() {
   const router = useRouter();
@@ -27,141 +30,186 @@ export default function ForgotPasswordScreen() {
   const [email, setEmail] = useState('');
   const [isLoading, setIsLoading] = useState(false);
 
-  // ส่งลิงก์รีเซ็ตรหัสผ่านผ่าน Firebase Auth
   const handleResetPassword = async () => {
-    const cleanEmail = email.trim();
+    const cleanEmail = email.trim().toLowerCase();
 
     if (!cleanEmail) {
-      Alert.alert('Error', 'Please enter your Email address');
+      Alert.alert('ข้อผิดพลาด', 'กรุณากรอกอีเมลของคุณ');
       return;
     }
 
     setIsLoading(true);
+
     try {
-      await sendPasswordResetEmail(auth, cleanEmail);
+      // ระบุ Generic Type <ForgotPasswordResponse> เพื่อให้ TypeScript รู้จัก property message
+      const data = await apiFetch<ForgotPasswordResponse>('/api/auth/forgot-password', {
+        method: 'POST',
+        body: JSON.stringify({ email: cleanEmail }),
+      });
+
       Alert.alert(
-        'Email Sent', 
-        'Password restore link has been sent to your email.',
-        [{ text: 'OK', onPress: () => router.push('/login') }]
+        'ส่งอีเมลสำเร็จ',
+        data?.message || 'ส่งลิงก์สำหรับตั้งรหัสผ่านใหม่ไปยังอีเมลของคุณเรียบร้อยแล้ว',
+        [{ text: 'ตกลง', onPress: () => router.push('/(auth)/login') }]
       );
     } catch (error: any) {
-      let errorMessage = 'Failed to send password reset email.';
-      
-      if (error.code === 'auth/user-not-found') {
-        errorMessage = 'No account found with this email address.';
-      } else if (error.code === 'auth/invalid-email') {
-        errorMessage = 'Invalid email address format.';
-      } else if (error.code === 'auth/too-many-requests') {
-        errorMessage = 'Too many requests. Please try again later.';
-      }
-
-      Alert.alert('Reset Failed', errorMessage);
+      Alert.alert('ทำรายการไม่สำเร็จ', error.message || 'ไม่สามารถส่งอีเมลรีเซ็ตรหัสผ่านได้');
     } finally {
       setIsLoading(false);
     }
   };
 
   return (
-    <View style={styles.container}>
+    <View style={{ flex: 1, backgroundColor: '#ffffff' }}>
       <StatusBar barStyle="dark-content" backgroundColor="#ffffff" translucent={true} />
 
-      <ScrollView contentContainerStyle={[styles.scrollContent, { paddingTop: insets.top + 10 }]}>
-        
-        {/* Header Illustration */}
-        <View style={styles.headerSection}>
-          <Image
-            source={{ uri: 'https://cdn-icons-png.flaticon.com/512/2693/2693507.png' }}
-            style={styles.calendarIcon}
-          />
-          <Text style={styles.brandTitle}>friends Calendar</Text>
-        </View>
-
-        {/* Teal Form Container */}
-        <View style={styles.formCard}>
-          <Text style={styles.cardTitle}>Forgot Password</Text>
-          <Text style={styles.cardSubtitle}>Enter your Email for password restore</Text>
-
-          {/* Email Input */}
-          <View style={styles.inputWrapper}>
-            <Mail color="#1C4E4E" size={18} style={styles.inputIcon} />
-            <TextInput
-              value={email}
-              onChangeText={setEmail}
-              placeholder="Email"
-              placeholderTextColor="#8EAEAE"
-              keyboardType="email-address"
-              autoCapitalize="none"
-              style={styles.textInput}
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+        style={{ flex: 1 }}
+      >
+        <ScrollView
+          contentContainerStyle={{
+            flexGrow: 1,
+            paddingTop: Math.max(insets.top + 12, 20),
+          }}
+          showsVerticalScrollIndicator={false}
+          keyboardShouldPersistTaps="handled"
+          bounces={false}
+        >
+          {/* Header Illustration */}
+          <View style={{ alignItems: 'center', paddingBottom: 24, paddingHorizontal: 20 }}>
+            <Image
+              source={{ uri: 'https://cdn-icons-png.flaticon.com/512/2693/2693507.png' }}
+              style={{ width: 90, height: 90, resizeMode: 'contain', marginBottom: 6 }}
             />
+            <Text
+              style={{
+                fontSize: 16,
+                fontWeight: '700',
+                color: '#1C4E4E',
+                letterSpacing: 0.5,
+              }}
+            >
+              friends Calendar
+            </Text>
           </View>
 
-          {/* Reset Password Button */}
-          <TouchableOpacity 
-            style={styles.primaryButton} 
-            onPress={handleResetPassword}
-            disabled={isLoading}
+          {/* Teal Form Container */}
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: '#489B9B',
+              borderTopLeftRadius: 36,
+              borderTopRightRadius: 36,
+              paddingHorizontal: 24,
+              paddingTop: 32,
+              paddingBottom: Math.max(insets.bottom + 24, 32),
+              elevation: 8,
+            }}
           >
-            {isLoading ? (
-              <ActivityIndicator color="#ffffff" size="small" />
-            ) : (
-              <Text style={styles.primaryButtonText}>Reset Password</Text>
-            )}
-          </TouchableOpacity>
+            <Text
+              style={{
+                fontSize: 22,
+                fontWeight: '800',
+                color: '#ffffff',
+                textAlign: 'center',
+                letterSpacing: 0.5,
+              }}
+            >
+              Forgot Password
+            </Text>
+            <Text
+              style={{
+                fontSize: 13,
+                color: '#E0F2F1',
+                textAlign: 'center',
+                marginTop: 4,
+                marginBottom: 28,
+              }}
+            >
+              Enter your Email for password restore
+            </Text>
 
-          {/* Return to Login */}
-          <TouchableOpacity 
-            style={styles.returnButton} 
-            onPress={() => router.push('/login')}
-          >
-            <Text style={styles.returnButtonText}>Return to Login</Text>
-          </TouchableOpacity>
+            {/* Email Input */}
+            <View
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                backgroundColor: '#ffffff',
+                borderRadius: 14,
+                paddingHorizontal: 16,
+                height: 52,
+                marginBottom: 20,
+              }}
+            >
+              <Mail color="#1C4E4E" size={20} style={{ marginRight: 12 }} />
+              <TextInput
+                value={email}
+                onChangeText={setEmail}
+                placeholder="Email"
+                placeholderTextColor="#8EAEAE"
+                keyboardType="email-address"
+                autoCapitalize="none"
+                style={{
+                  flex: 1,
+                  fontSize: 14,
+                  color: '#1C4E4E',
+                  fontWeight: '500',
+                }}
+              />
+            </View>
 
-        </View>
-      </ScrollView>
+            {/* Reset Password Button */}
+            <TouchableOpacity
+              style={{
+                backgroundColor: '#1C4E4E',
+                borderRadius: 14,
+                height: 52,
+                justifyContent: 'center',
+                alignItems: 'center',
+                marginBottom: 20,
+                elevation: 4,
+              }}
+              onPress={handleResetPassword}
+              disabled={isLoading}
+              activeOpacity={0.85}
+            >
+              {isLoading ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <Text
+                  style={{
+                    color: '#ffffff',
+                    fontWeight: '800',
+                    fontSize: 15,
+                    letterSpacing: 0.5,
+                  }}
+                >
+                  Reset Password
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Return to Login */}
+            <TouchableOpacity
+              style={{ alignItems: 'center', paddingVertical: 10 }}
+              onPress={() => router.push('/(auth)/login')}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={{
+                  color: '#ffffff',
+                  fontSize: 13,
+                  fontWeight: '700',
+                  textDecorationLine: 'underline',
+                }}
+              >
+                Return to Login
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </View>
   );
 }
-
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#ffffff' },
-  scrollContent: { flexGrow: 1 },
-  headerSection: { alignItems: 'center', paddingBottom: 24 },
-  calendarIcon: { width: 90, height: 90, resizeMode: 'contain', marginBottom: 4 },
-  brandTitle: { fontSize: 16, fontFamily: Platform.OS === 'ios' ? 'Snell Roundhand' : 'serif', color: '#1C4E4E' },
-  
-  formCard: {
-    flex: 1,
-    backgroundColor: '#489B9B',
-    borderTopLeftRadius: 36,
-    borderTopRightRadius: 36,
-    padding: 24,
-    paddingTop: 32,
-  },
-  cardTitle: { fontSize: 22, fontWeight: 'bold', color: '#ffffff', textAlign: 'center', letterSpacing: 0.5 },
-  cardSubtitle: { fontSize: 11, color: '#E0F2F1', textAlign: 'center', marginTop: 4, marginBottom: 24 },
-  
-  inputWrapper: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    height: 44,
-    marginBottom: 20,
-  },
-  inputIcon: { marginRight: 8 },
-  textInput: { flex: 1, fontSize: 13, color: '#1C4E4E' },
-
-  primaryButton: {
-    backgroundColor: '#1C4E4E',
-    borderRadius: 8,
-    height: 44,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-  primaryButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 14 },
-
-  returnButton: { alignItems: 'center', paddingVertical: 8 },
-  returnButtonText: { color: '#ffffff', fontSize: 12, fontWeight: 'bold', textDecorationLine: 'underline' },
-});

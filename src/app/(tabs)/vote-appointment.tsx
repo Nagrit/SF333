@@ -1,88 +1,206 @@
-import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StatusBar, Platform, Image } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import { ArrowLeft, Check } from 'lucide-react-native';
+import { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StatusBar,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ArrowLeft, Share2, Check, CheckSquare, Square } from 'lucide-react-native';
+import { apiFetch } from '../../services/api';
+
+export interface VoteOption {
+  id: string;
+  title?: string;
+  date: string;
+  time: string;
+  votes: string;
+  progress: number;
+  avatars?: string[];
+}
+
+export interface VoteAppointmentData {
+  title: string;
+  groupName: string;
+  status?: string;
+  isVote?: boolean;
+  options: VoteOption[];
+  userSelectedIds?: string[];
+  isOrganizer?: boolean;
+}
 
 export default function VoteAppointmentScreen() {
   const router = useRouter();
+  const params = useLocalSearchParams();
+  const appointmentId = (params.id as string) || '';
   const insets = useSafeAreaInsets();
-  const [selectedOptions, setSelectedOptions] = useState<string[]>(['1', '3']);
+
+  const [voteData, setVoteData] = useState<VoteAppointmentData | null>(null);
+  const [selectedOptions, setSelectedOptions] = useState<string[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const fetchVoteDetails = useCallback(async (isPullToRefresh = false) => {
+    if (!appointmentId) return;
+
+    try {
+      if (!isPullToRefresh) setIsLoading(true);
+      const res = await apiFetch<any>(`/api/appointments/${appointmentId}/vote`);
+
+      if (res.status === 'confirmed' || res.isVote === false) {
+        Alert.alert('การโหวตสิ้นสุดแล้ว', 'ผู้จัดได้ทำการสรุปวันนัดหมายเรียบร้อยแล้ว', [
+          {
+            text: 'ดูรายละเอียดนัดหมาย',
+            onPress: () => router.replace({ pathname: '/appointment-detail', params: { id: appointmentId } })
+          }
+        ]);
+        return;
+      }
+
+      const mappedData: VoteAppointmentData = {
+        title: res.title || 'นัดหมาย',
+        groupName: res.groupName || res.group || 'กลุ่มทั่วไป',
+        userSelectedIds: res.userSelectedIds || [],
+        isOrganizer: res.isOrganizer ?? false,
+        options: (res.options || []).map((opt: any) => ({
+          id: opt.id || '1',
+          title: opt.title || 'วันและเวลาที่เสนอ',
+          date: opt.date || opt.dateText || 'ไม่ระบุวัน',
+          time: opt.time || opt.timeText || 'ไม่ระบุเวลา',
+          votes: opt.votes || `${opt.votesCount || 0} คน`,
+          progress: typeof opt.progress === 'number' ? opt.progress : 0,
+          avatars: opt.avatars || [],
+        }))
+      };
+
+      setVoteData(mappedData);
+      setSelectedOptions(mappedData.userSelectedIds || []);
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถดึงข้อมูลการโหวตได้');
+    } finally {
+      setIsLoading(false);
+      setRefreshing(false);
+    }
+  }, [appointmentId]);
+
+  useEffect(() => {
+    fetchVoteDetails();
+  }, [fetchVoteDetails]);
 
   const toggleOption = (id: string) => {
-    setSelectedOptions(prev => 
+    setSelectedOptions(prev =>
       prev.includes(id) ? prev.filter(item => item !== id) : [...prev, id]
     );
   };
 
-  const options = [
-    { id: '1', title: 'ตัวเลือกที่ 1', date: 'วันเสาร์ที่ 21 กุมภาพันธ์ 2026', time: '08:00 - 20:00 น. (เต็มวัน)', votes: '4/5 โหวต', progress: 0.8, avatars: ['https://picsum.photos/seed/v1/100', 'https://picsum.photos/seed/v2/100', 'https://picsum.photos/seed/v3/100', 'https://picsum.photos/seed/v4/100'] },
-    { id: '2', title: 'ตัวเลือกที่ 2', date: 'วันอาทิตย์ที่ 22 กุมภาพันธ์ 2026', time: '08:00 - 20:00 น. (เต็มวัน)', votes: '2/5 โหวต', progress: 0.4, avatars: ['https://picsum.photos/seed/v5/100', 'https://picsum.photos/seed/v6/100'] },
-    { id: '3', title: 'ตัวเลือกที่ 3', date: 'วันเสาร์ที่ 28 กุมภาพันธ์ 2026', time: '08:00 - 20:00 น. (เต็มวัน)', votes: '3/5 โหวต', progress: 0.6, avatars: ['https://picsum.photos/seed/v7/100', 'https://picsum.photos/seed/v8/100', 'https://picsum.photos/seed/v9/100'] },
-  ];
+  const handleSubmitVote = async () => {
+    if (selectedOptions.length === 0) {
+      Alert.alert('แจ้งเตือน', 'กรุณาเลือกอย่างน้อย 1 ตัวเลือกเพื่อโหวต');
+      return;
+    }
+
+    try {
+      setIsSubmitting(true);
+      await apiFetch(`/api/appointments/${appointmentId}/vote`, {
+        method: 'POST',
+        body: JSON.stringify({ optionIds: selectedOptions })
+      });
+
+      Alert.alert('สำเร็จ', 'บันทึกการโหวตวันนัดหมายของคุณแล้ว', [
+        {
+          text: 'ดูผลโหวต',
+          onPress: () => router.push({ pathname: '/vote-result', params: { id: appointmentId } })
+        }
+      ]);
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถส่งผลโหวตได้');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (isLoading || !voteData) {
+    return (
+      <View style={styles.loaderContainer}>
+        <ActivityIndicator size="large" color="#468f92" />
+      </View>
+    );
+  }
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#cce1de' }}>
+    <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="transparent" translucent={true} />
 
-      {/* Header */}
-      <View style={{ backgroundColor: '#468f92', paddingHorizontal: 20, paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12, paddingBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TouchableOpacity onPress={() => router.back()} style={{ paddingRight: 12 }}>
+      <View style={[styles.header, { paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12 }]}>
+        <View style={styles.headerLeft}>
+          <TouchableOpacity onPress={() => router.back()} style={styles.backButton}>
             <ArrowLeft color="#ffffff" size={22} />
           </TouchableOpacity>
-          <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 18 }}>โหวตการนัด 💻</Text>
+          <Text style={styles.headerTitle}>โหวตการนัด 💻</Text>
         </View>
-        <TouchableOpacity style={{ padding: 4 }}>
-          <Share2 color="#ffffff" size={20} />
-        </TouchableOpacity>
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: 16, paddingBottom: 32 }}>
-        {/* Title */}
-        <Text style={{ fontSize: 16, fontWeight: 'bold', color: '#1f2937', marginBottom: 2 }}>นัดเที่ยวทะเลพัทยา 🏖️</Text>
-        <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 16 }}>กลุ่ม: แก๊งค์มหาลัย · สามารถเลือกได้มากกว่า 1 ข้อ</Text>
+      <ScrollView
+        showsVerticalScrollIndicator={false}
+        contentContainerStyle={styles.scrollContent}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); fetchVoteDetails(true); }} colors={['#468f92']} />
+        }
+      >
+        <Text style={styles.titleText}>{voteData.title}</Text>
+        <Text style={styles.subtitleText}>กลุ่ม: {voteData.groupName} · เลือกวันและเวลาที่คุณสะดวก</Text>
 
-        {/* Options */}
-        {options.map((item) => {
+        {voteData.options.map(item => {
           const isSelected = selectedOptions.includes(item.id);
+          const avatars = item.avatars || [];
+          const progressPercent = Math.min(Math.max((item.progress || 0) * 100, 0), 100);
+
           return (
-            <TouchableOpacity 
-              key={item.id} 
+            <TouchableOpacity
+              key={item.id}
               onPress={() => toggleOption(item.id)}
               activeOpacity={0.9}
-              style={{ backgroundColor: '#ffffff', borderRadius: 18, padding: 16, marginBottom: 14, elevation: 2 }}
+              style={styles.optionCard}
             >
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+              <View style={styles.optionHeader}>
+                <View style={styles.optionHeaderLeft}>
                   {isSelected ? (
-                    <View style={{ width: 20, height: 20, borderRadius: 5, backgroundColor: '#3caea3', alignItems: 'center', justifyContent: 'center', marginRight: 8 }}>
+                    <View style={styles.checkboxSelected}>
                       <Check color="white" size={14} strokeWidth={3} />
                     </View>
                   ) : (
-                    <View style={{ width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: '#9ca3af', marginRight: 8 }} />
+                    <View style={styles.checkboxUnselected} />
                   )}
-                  <Text style={{ fontSize: 12, fontWeight: 'bold', color: isSelected ? '#217371' : '#6b7280' }}>{item.title}</Text>
+                  <Text style={[styles.optionTitle, { color: isSelected ? '#217371' : '#1f2937' }]}>
+                    {item.title}
+                  </Text>
                 </View>
-                <View style={{ backgroundColor: '#eef5f4', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 }}>
-                  <Text style={{ fontSize: 10, fontWeight: 'bold', color: '#217371' }}>{item.votes}</Text>
+                <View style={styles.votesBadge}>
+                  <Text style={styles.votesBadgeText}>{item.votes}</Text>
                 </View>
               </View>
 
-              <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#1f2937', marginBottom: 2 }}>{item.date}</Text>
-              <Text style={{ fontSize: 11, color: '#6b7280', marginBottom: 12 }}>{item.time}</Text>
+              <Text style={styles.optionDate}>{item.date}</Text>
+              <Text style={styles.optionTime}>{item.time}</Text>
 
-              {/* Progress Bar */}
-              <View style={{ height: 6, backgroundColor: '#e5e7eb', borderRadius: 3, overflow: 'hidden', marginBottom: 12 }}>
-                <View style={{ height: '100%', width: `${item.progress * 100}%`, backgroundColor: '#3caea3', borderRadius: 3 }} />
+              <View style={styles.progressBarBg}>
+                <View style={[styles.progressBarFill, { width: `${progressPercent}%` }]} />
               </View>
 
-              {/* Avatars */}
-              <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
-                <Text style={{ fontSize: 10, color: '#9ca3af' }}>เพื่อนที่โหวตตัวเลือกนี้:</Text>
-                <View style={{ flexDirection: 'row' }}>
-                  {item.avatars.map((url, idx) => (
-                    <Image key={idx} source={{ uri: url }} style={{ width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#ffffff', marginLeft: idx === 0 ? 0 : -6 }} />
+              <View style={styles.avatarsRow}>
+                <Text style={styles.avatarsLabel}>เพื่อนที่โหวตตัวเลือกนี้:</Text>
+                <View style={styles.avatarsList}>
+                  {avatars.map((url, idx) => (
+                    <Image key={idx} source={{ uri: url }} style={[styles.avatarImg, { marginLeft: idx === 0 ? 0 : -6 }]} />
                   ))}
                 </View>
               </View>
@@ -90,15 +208,44 @@ export default function VoteAppointmentScreen() {
           );
         })}
 
-        {/* Submit Button */}
-        <TouchableOpacity 
-          onPress={() => router.push('/vote-result')}
-          style={{ backgroundColor: '#217371', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10, elevation: 2 }}
-        >
-          <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>ยืนยันวันนัดที่ถูกเลือก 🏆</Text>
+        <TouchableOpacity onPress={handleSubmitVote} disabled={isSubmitting} style={styles.submitButton}>
+          {isSubmitting ? (
+            <ActivityIndicator color="#ffffff" size="small" />
+          ) : (
+            <Text style={styles.submitButtonText}>ยืนยันการโหวต 🏆</Text>
+          )}
         </TouchableOpacity>
-        <Text style={{ fontSize: 10, color: '#6b7280', textAlign: 'center', marginTop: 8 }}>ผู้จัดงานเท่านั้นที่มีสิทธิ์สรุปโหวตครั้งนี้</Text>
       </ScrollView>
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#cce1de' },
+  loaderContainer: { flex: 1, backgroundColor: '#cce1de', justifyContent: 'center', alignItems: 'center' },
+  header: { backgroundColor: '#468f92', paddingHorizontal: 20, paddingBottom: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  headerLeft: { flexDirection: 'row', alignItems: 'center' },
+  backButton: { paddingRight: 12 },
+  headerTitle: { color: '#ffffff', fontWeight: 'bold', fontSize: 18 },
+  scrollContent: { padding: 16, paddingBottom: 32 },
+  titleText: { fontSize: 16, fontWeight: 'bold', color: '#1f2937', marginBottom: 2 },
+  subtitleText: { fontSize: 11, color: '#6b7280', marginBottom: 16 },
+  optionCard: { backgroundColor: '#ffffff', borderRadius: 18, padding: 16, marginBottom: 14, elevation: 2 },
+  optionHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
+  optionHeaderLeft: { flexDirection: 'row', alignItems: 'center', flex: 1 },
+  checkboxSelected: { width: 20, height: 20, borderRadius: 5, backgroundColor: '#3caea3', alignItems: 'center', justifyContent: 'center', marginRight: 8 },
+  checkboxUnselected: { width: 20, height: 20, borderRadius: 5, borderWidth: 1.5, borderColor: '#9ca3af', marginRight: 8 },
+  optionTitle: { fontSize: 12, fontWeight: 'bold', flex: 1 },
+  votesBadge: { backgroundColor: '#eef5f4', paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  votesBadgeText: { fontSize: 10, fontWeight: 'bold', color: '#217371' },
+  optionDate: { fontSize: 14, fontWeight: 'bold', color: '#1f2937', marginBottom: 2 },
+  optionTime: { fontSize: 11, color: '#6b7280', marginBottom: 12 },
+  progressBarBg: { height: 6, backgroundColor: '#e5e7eb', borderRadius: 3, overflow: 'hidden', marginBottom: 12 },
+  progressBarFill: { height: '100%', backgroundColor: '#3caea3', borderRadius: 3 },
+  avatarsRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  avatarsLabel: { fontSize: 10, color: '#9ca3af' },
+  avatarsList: { flexDirection: 'row' },
+  avatarImg: { width: 22, height: 22, borderRadius: 11, borderWidth: 1.5, borderColor: '#ffffff', backgroundColor: '#e5e7eb' },
+  submitButton: { backgroundColor: '#217371', borderRadius: 14, paddingVertical: 14, alignItems: 'center', marginTop: 10 },
+  submitButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 14 }
+});

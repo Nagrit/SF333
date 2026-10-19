@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard';
+import { File } from 'expo-file-system';
 import * as ImagePicker from 'expo-image-picker';
 import { useRouter } from 'expo-router';
 import * as SecureStore from 'expo-secure-store';
@@ -25,6 +26,7 @@ import {
   Platform,
   ScrollView,
   StatusBar,
+  StyleSheet,
   Switch,
   Text,
   TextInput,
@@ -32,11 +34,7 @@ import {
   View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
-// Firebase Imports
-import { updateProfile } from 'firebase/auth';
-import { doc, getDoc, updateDoc } from 'firebase/firestore';
-import { auth, db } from '../../services/firebase';
+import { apiFetch } from '../../services/api';
 
 export interface UserProfileData {
   id: string;
@@ -50,19 +48,15 @@ export interface UserProfileData {
 export default function ProfileScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
-  const currentUser = auth.currentUser;
 
   const [profile, setProfile] = useState<UserProfileData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isUpdatingAvatar, setIsUpdatingAvatar] = useState(false);
-
-  // Modal State
   const [activeModal, setActiveModal] = useState<'1' | '2' | '3' | '4' | null>(null);
 
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
 
-  // Setting States
   const [notiAppointments, setNotiAppointments] = useState(true);
   const [notiGroups, setNotiGroups] = useState(true);
   const [isPrivate, setIsPrivate] = useState(false);
@@ -71,142 +65,94 @@ export default function ProfileScreen() {
     const loadProfile = async () => {
       try {
         setIsLoading(true);
-
-        let fetchedUsername = '';
-        let fetchedFriendCode = 'FC-XXXXXX';
-        let fetchedAvatar = '';
-        let fetchedName = '';
-        let fetchedEmail = '';
-
-        if (currentUser) {
-          const userDocRef = doc(db, 'users', currentUser.uid);
-          const userDoc = await getDoc(userDocRef);
-          if (userDoc.exists()) {
-            const data = userDoc.data();
-            fetchedUsername = data.username || '';
-            fetchedFriendCode = data.friendCode || 'FC-XXXXXX';
-            fetchedAvatar = data.avatar || '';
-            fetchedName = data.name || '';
-            fetchedEmail = data.email || '';
-          }
-        }
-
-        const savedUserInfo = await SecureStore.getItemAsync('userInfo');
-        const parsedUser = savedUserInfo ? JSON.parse(savedUserInfo) : {};
-
-        const loadedProfile = {
-          id: currentUser?.uid || 'usr_01',
-          name: fetchedName || parsedUser.name || currentUser?.displayName || 'ผู้ใช้งาน',
-          username: fetchedUsername || parsedUser.username || 'user',
-          email: fetchedEmail || parsedUser.email || currentUser?.email || 'user@example.com',
-          friendCode: fetchedFriendCode,
-          avatar: currentUser?.photoURL || fetchedAvatar || parsedUser.avatar || `https://picsum.photos/seed/${currentUser?.uid || 'user1'}/200`,
-        };
-
-        setProfile(loadedProfile);
-        setEditName(loadedProfile.name);
-        setEditEmail(loadedProfile.email);
-      } catch (error) {
-        Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถดึงข้อมูลโปรไฟล์ได้');
+        const userData = await apiFetch<UserProfileData>('/api/auth/me');
+        setProfile(userData);
+        setEditName(userData.name);
+        setEditEmail(userData.email);
+      } catch (error: any) {
+        Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถดึงข้อมูลโปรไฟล์ได้');
       } finally {
         setIsLoading(false);
       }
     };
 
     loadProfile();
-  }, [currentUser]);
+  }, []);
 
-  // ฟังก์ชันคัดลอกรหัสเพื่อนเข้า Clipboard
   const handleCopyFriendCode = async (code: string) => {
     await Clipboard.setStringAsync(code);
     Alert.alert('คัดลอกแล้ว', `คัดลอกรหัส ${code} ไปยังคลิปบอร์ดเรียบร้อยแล้ว`);
   };
 
+
   const handlePickImage = async () => {
-    const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    try {
+      const permissionResult =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
 
-    if (!permissionResult.granted) {
-      Alert.alert('การเข้าถึงถูกปฏิเสธ', 'กรุณานุญาตการเข้าถึงรูปภาพในตั้งค่าเครื่อง');
-      return;
-    }
+      if (!permissionResult.granted) {
+        Alert.alert(
+          'การเข้าถึงถูกปฏิเสธ',
+          'กรุณาอนุญาตการเข้าถึงรูปภาพในตั้งค่าเครื่อง',
+        );
+        return;
+      }
 
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ['images'],
-      allowsEditing: true,
-      aspect: [1, 1],
-      quality: 0.7,
-    });
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.7,
+      });
 
-    if (!result.canceled && result.assets[0].uri) {
-      const newAvatarUri = result.assets[0].uri;
+      if (result.canceled || !result.assets[0]?.uri) {
+        return;
+      }
+
+      const asset = result.assets[0];
+
       setIsUpdatingAvatar(true);
 
-      try {
-        if (profile) {
-          const updated = { ...profile, avatar: newAvatarUri };
-          setProfile(updated);
+      const formData = new FormData();
+      formData.append('avatar', new File(asset.uri) as any);
 
-          // บันทึกลง SecureStore
-          await SecureStore.setItemAsync('userInfo', JSON.stringify({
-            name: updated.name,
-            username: updated.username,
-            email: updated.email,
-            friendCode: updated.friendCode,
-            avatar: newAvatarUri
-          }));
-        }
+      const updated = await apiFetch<UserProfileData>(
+        '/api/user/profile/avatar',
+        {
+          method: 'POST',
+          body: formData,
+        },
+      );
 
-        if (currentUser) {
-          // อัปเดตใน Firebase Auth
-          await updateProfile(currentUser, { photoURL: newAvatarUri });
+      setProfile(updated);
 
-          // 🔥 บันทึกลงใน Firestore collection 'users' เพื่อให้เพื่อนและทุกคนในกลุ่มดึงไปแสดงผลได้
-          await updateDoc(doc(db, 'users', currentUser.uid), {
-            avatar: newAvatarUri
-          });
-        }
-
-        Alert.alert('สำเร็จ', 'บันทึกรูปโปรไฟล์เรียบร้อยแล้ว');
-      } catch (error) {
-        console.log('Error updating avatar:', error);
-        Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถอัปเดตรูปโปรไฟล์ได้');
-      } finally {
-        setIsUpdatingAvatar(false);
-      }
+      Alert.alert(
+        'สำเร็จ',
+        'บันทึกรูปโปรไฟล์เรียบร้อยแล้ว',
+      );
+    } catch (error: any) {
+      Alert.alert(
+        'เกิดข้อผิดพลาด',
+        error.message || 'ไม่สามารถอัปเดตรูปโปรไฟล์ได้',
+      );
+    } finally {
+      setIsUpdatingAvatar(false);
     }
   };
+
 
   const handleSaveProfile = async () => {
     if (!profile) return;
     try {
-      const updatedProfile = {
-        ...profile,
-        name: editName,
-        email: editEmail
-      };
-      setProfile(updatedProfile);
-
-      await SecureStore.setItemAsync('userInfo', JSON.stringify({
-        name: editName,
-        username: profile.username,
-        email: editEmail,
-        friendCode: profile.friendCode,
-        avatar: profile.avatar
-      }));
-
-      if (currentUser) {
-        await updateProfile(currentUser, { displayName: editName });
-        // บันทึกลง Firestore ด้วยเช่นกัน
-        await updateDoc(doc(db, 'users', currentUser.uid), {
-          name: editName,
-          email: editEmail
-        });
-      }
-
+      const updated = await apiFetch<UserProfileData>('/api/user/profile', {
+        method: 'PUT',
+        body: JSON.stringify({ name: editName, email: editEmail })
+      });
+      setProfile(updated);
       setActiveModal(null);
       Alert.alert('สำเร็จ', 'บันทึกข้อมูลส่วนตัวเรียบร้อยแล้ว');
-    } catch (e) {
-      Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถบันทึกข้อมูลได้');
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกข้อมูลได้');
     }
   };
 
@@ -217,13 +163,8 @@ export default function ProfileScreen() {
         text: 'ออกจากระบบ',
         style: 'destructive',
         onPress: async () => {
-          try {
-            await SecureStore.deleteItemAsync('userToken');
-            await SecureStore.deleteItemAsync('userInfo');
-            router.replace('/login');
-          } catch (error) {
-            Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถออกจากระบบได้');
-          }
+          await SecureStore.deleteItemAsync('userToken');
+          router.replace('/login');
         }
       }
     ]);
@@ -238,243 +179,60 @@ export default function ProfileScreen() {
 
   if (isLoading || !profile) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#cce1de', justifyContent: 'center', alignItems: 'center' }}>
+      <View style={styles.loaderContainer}>
         <ActivityIndicator size="large" color="#468f92" />
       </View>
     );
   }
 
-  const renderModalContent = () => {
-    switch (activeModal) {
-      case '1':
-        return (
-          <View>
-            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 16 }}>แก้ไขข้อมูลส่วนตัว</Text>
-
-            <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 6 }}>ชื่อ - นามสกุล</Text>
-            <View style={{ backgroundColor: '#f3f4f6', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 12 }}>
-              <TextInput
-                value={editName}
-                onChangeText={setEditName}
-                placeholder="ระบุชื่อของคุณ"
-                style={{ fontSize: 14, color: '#374151' }}
-              />
-            </View>
-
-            <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 6 }}>Username (ไม่สามารถเปลี่ยนได้)</Text>
-            <View style={{ backgroundColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 12 }}>
-              <Text style={{ fontSize: 14, color: '#9ca3af' }}>@{profile.username}</Text>
-            </View>
-
-            <Text style={{ fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 6 }}>อีเมล</Text>
-            <View style={{ backgroundColor: '#f3f4f6', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 24 }}>
-              <TextInput
-                value={editEmail}
-                onChangeText={setEditEmail}
-                placeholder="ระบุอีเมล"
-                keyboardType="email-address"
-                autoCapitalize="none"
-                style={{ fontSize: 14, color: '#374151' }}
-              />
-            </View>
-
-            <TouchableOpacity
-              onPress={handleSaveProfile}
-              style={{ backgroundColor: '#468f92', borderRadius: 12, height: 46, justifyContent: 'center', alignItems: 'center' }}
-            >
-              <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>บันทึกข้อมูล</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      case '2':
-        return (
-          <View>
-            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 16 }}>ตั้งค่าการแจ้งเตือน</Text>
-
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#f3f4f6' }}>
-              <View>
-                <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#374151' }}>การนัดหมาย</Text>
-                <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>เตือนเมื่อถึงเวลานัดหมายหรือมีการอัปเดต</Text>
-              </View>
-              <Switch value={notiAppointments} onValueChange={setNotiAppointments} trackColor={{ false: '#d1d5db', true: '#468f92' }} />
-            </View>
-
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, marginBottom: 16 }}>
-              <View>
-                <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#374151' }}>กลุ่มและการเชิญ</Text>
-                <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>เตือนเมื่อมีการเชิญเข้ากลุ่มใหม่</Text>
-              </View>
-              <Switch value={notiGroups} onValueChange={setNotiGroups} trackColor={{ false: '#d1d5db', true: '#468f92' }} />
-            </View>
-
-            <TouchableOpacity
-              onPress={() => setActiveModal(null)}
-              style={{ backgroundColor: '#468f92', borderRadius: 12, height: 46, justifyContent: 'center', alignItems: 'center' }}
-            >
-              <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>ตกลง</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      case '3':
-        return (
-          <View>
-            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 16 }}>ความเป็นส่วนตัวและความปลอดภัย</Text>
-
-            <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#f3f4f6' }}>
-              <View style={{ flex: 1, marginRight: 8 }}>
-                <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#374151' }}>โหมดส่วนตัว</Text>
-                <Text style={{ fontSize: 11, color: '#9ca3af', marginTop: 2 }}>ซ่อนสถานะความว่างจากเพื่อนในกลุ่ม</Text>
-              </View>
-              <Switch value={isPrivate} onValueChange={setIsPrivate} trackColor={{ false: '#d1d5db', true: '#3caea3' }} />
-            </View>
-
-            <TouchableOpacity
-              onPress={() => {
-                setActiveModal(null);
-                Alert.alert('ส่งอีเมลแล้ว', 'เราได้ส่งลิงก์เปลี่ยนรหัสผ่านไปยังอีเมลของคุณแล้ว');
-              }}
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderColor: '#f3f4f6' }}
-            >
-              <Lock size={18} color="#374151" style={{ marginRight: 10 }} />
-              <Text style={{ fontSize: 14, fontWeight: 'bold', color: '#374151', flex: 1 }}>เปลี่ยนรหัสผ่าน</Text>
-              <ChevronRight color="#9ca3af" size={18} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setActiveModal(null)}
-              style={{ backgroundColor: '#3caea3', borderRadius: 12, height: 46, justifyContent: 'center', alignItems: 'center', marginTop: 20 }}
-            >
-              <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>ปิด</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      case '4':
-        return (
-          <View>
-            <Text style={{ fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 16 }}>ช่วยเหลือและสนับสนุน</Text>
-
-            <TouchableOpacity style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#f3f4f6' }}>
-              <HelpCircle size={18} color="#a388cd" style={{ marginRight: 12 }} />
-              <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', flex: 1 }}>คำถามที่พบบ่อย (FAQ)</Text>
-              <ChevronRight color="#9ca3af" size={18} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => Alert.alert('ติดต่อเรา', 'ส่งข้อความหาเราได้ที่ support@friends-calendar.app')}
-              style={{ flexDirection: 'row', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#f3f4f6' }}
-            >
-              <Mail size={18} color="#a388cd" style={{ marginRight: 12 }} />
-              <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151', flex: 1 }}>ติดต่อฝ่ายสนับสนุน</Text>
-              <ChevronRight color="#9ca3af" size={18} />
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              onPress={() => setActiveModal(null)}
-              style={{ backgroundColor: '#468f92', borderRadius: 12, height: 46, justifyContent: 'center', alignItems: 'center', marginTop: 20 }}
-            >
-              <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 14 }}>ตกลง</Text>
-            </TouchableOpacity>
-          </View>
-        );
-
-      default:
-        return null;
-    }
-  };
-
   return (
-    <View style={{ flex: 1, backgroundColor: '#cce1de' }}>
+    <View style={styles.container}>
       <StatusBar barStyle="light-content" backgroundColor="#468f92" translucent={true} />
 
       <ScrollView showsVerticalScrollIndicator={false}>
         {/* Profile Header */}
-        <View
-          style={{
-            backgroundColor: '#468f92',
-            paddingHorizontal: 20,
-            paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12,
-            paddingBottom: 28,
-            borderBottomLeftRadius: 28,
-            borderBottomRightRadius: 28,
-            alignItems: 'center'
-          }}
-        >
-          {/* Avatar Container + Camera Button */}
-          <View style={{ position: 'relative', marginBottom: 12 }}>
-            <Image
-              source={{ uri: profile.avatar }}
-              style={{ width: 88, height: 88, borderRadius: 44, borderWidth: 3, borderColor: '#ffffff' }}
-            />
+        <View style={[styles.header, { paddingTop: Math.max(insets.top, Platform.OS === 'android' ? StatusBar.currentHeight || 24 : 12) + 12 }]}>
+          <View style={styles.avatarContainer}>
+            <Image source={{ uri: profile.avatar }} style={styles.avatarImage} />
             {isUpdatingAvatar && (
-              <View style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 44, justifyContent: 'center', alignItems: 'center' }}>
+              <View style={styles.avatarLoaderOverlay}>
                 <ActivityIndicator color="#ffffff" size="small" />
               </View>
             )}
-            <TouchableOpacity
-              onPress={handlePickImage}
-              activeOpacity={0.8}
-              style={{
-                position: 'absolute',
-                bottom: 0,
-                right: 0,
-                backgroundColor: '#1C4E4E',
-                width: 30,
-                height: 30,
-                borderRadius: 15,
-                borderWidth: 2,
-                borderColor: '#ffffff',
-                justifyContent: 'center',
-                alignItems: 'center',
-                elevation: 3
-              }}
-            >
+            <TouchableOpacity onPress={handlePickImage} activeOpacity={0.8} style={styles.cameraButton}>
               <Camera size={14} color="#ffffff" />
             </TouchableOpacity>
           </View>
 
-          {/* ชื่อจริง และ Username ในวงเล็บ */}
-          <Text style={{ color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 2, textAlign: 'center' }}>
-            {profile.name} <Text style={{ fontWeight: 'normal', fontSize: 15, color: 'rgba(255,255,255,0.9)' }}>(@{profile.username})</Text>
+          <Text style={styles.profileName}>
+            {profile.name} <Text style={styles.profileUsername}>(@{profile.username})</Text>
           </Text>
-          <Text style={{ color: 'rgba(255,255,255,0.8)', fontSize: 12, marginBottom: 10 }}>{profile.email}</Text>
+          <Text style={styles.profileEmail}>{profile.email}</Text>
 
-          {/* Friend Code Badge สำหรับระบบเพิ่มเพื่อน (กด Copy ได้จริง) */}
-          <TouchableOpacity
-            onPress={() => handleCopyFriendCode(profile.friendCode)}
-            activeOpacity={0.7}
-            style={{ flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(28, 78, 78, 0.4)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, gap: 6 }}
-          >
-            <Text style={{ color: '#ffffff', fontSize: 11, fontWeight: '600' }}>รหัสเพื่อน: {profile.friendCode}</Text>
+          <TouchableOpacity onPress={() => handleCopyFriendCode(profile.friendCode)} activeOpacity={0.7} style={styles.friendCodeBadge}>
+            <Text style={styles.friendCodeText}>รหัสเพื่อน: {profile.friendCode}</Text>
             <Copy size={13} color="#ffffff" />
           </TouchableOpacity>
         </View>
 
         {/* Menu List */}
-        <View style={{ marginHorizontal: 20, marginTop: 20, backgroundColor: '#ffffff', borderRadius: 20, padding: 8 }}>
+        <View style={styles.menuList}>
           {MENU_ITEMS.map((item, index) => {
             const IconComponent = item.icon;
             return (
               <TouchableOpacity
                 key={item.id}
                 onPress={() => setActiveModal(item.id as any)}
-                style={{
-                  flexDirection: 'row',
-                  alignItems: 'center',
-                  justifyContent: 'space-between',
-                  paddingVertical: 14,
-                  paddingHorizontal: 12,
-                  borderBottomWidth: index === MENU_ITEMS.length - 1 ? 0 : 1,
-                  borderColor: '#f3f4f6'
-                }}
+                style={[
+                  styles.menuItem,
+                  { borderBottomWidth: index === MENU_ITEMS.length - 1 ? 0 : 1 }
+                ]}
               >
-                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-                  <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: `${item.color}15`, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                <View style={styles.menuItemLeft}>
+                  <View style={[styles.menuIconContainer, { backgroundColor: `${item.color}15` }]}>
                     <IconComponent color={item.color} size={18} />
                   </View>
-                  <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#374151' }}>{item.title}</Text>
+                  <Text style={styles.menuItemTitle}>{item.title}</Text>
                 </View>
                 <ChevronRight color="#9ca3af" size={18} />
               </TouchableOpacity>
@@ -483,60 +241,170 @@ export default function ProfileScreen() {
         </View>
 
         {/* Logout Button */}
-        <TouchableOpacity
-          onPress={handleLogout}
-          style={{
-            marginHorizontal: 20,
-            marginTop: 16,
-            marginBottom: 28,
-            backgroundColor: '#ffffff',
-            borderRadius: 16,
-            paddingVertical: 14,
-            flexDirection: 'row',
-            alignItems: 'center',
-            justifyContent: 'center'
-          }}
-        >
+        <TouchableOpacity onPress={handleLogout} style={styles.logoutButton}>
           <LogOut color="#f87171" size={18} />
-          <Text style={{ fontSize: 13, fontWeight: 'bold', color: '#f87171', marginLeft: 8 }}>ออกจากระบบ</Text>
+          <Text style={styles.logoutText}>ออกจากระบบ</Text>
         </TouchableOpacity>
       </ScrollView>
 
-      {/* Modal Bottom Sheet */}
-      <Modal
-        visible={activeModal !== null}
-        animationType="slide"
-        transparent={true}
-        onRequestClose={() => setActiveModal(null)}
-      >
-        <TouchableOpacity
-          activeOpacity={1}
-          onPress={() => setActiveModal(null)}
-          style={{ flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)', justifyContent: 'flex-end' }}
-        >
-          <TouchableOpacity
-            activeOpacity={1}
-            style={{
-              backgroundColor: '#ffffff',
-              borderTopLeftRadius: 24,
-              borderTopRightRadius: 24,
-              padding: 24,
-              paddingBottom: Math.max(insets.bottom, 24)
-            }}
-          >
-            {/* Header Close Button */}
-            <View style={{ alignItems: 'flex-end', marginBottom: 8 }}>
-              <TouchableOpacity onPress={() => setActiveModal(null)} style={{ padding: 4 }}>
+      {/* Dynamic Modal Bottom Sheet */}
+      <Modal visible={activeModal !== null} animationType="slide" transparent={true} onRequestClose={() => setActiveModal(null)}>
+        <TouchableOpacity activeOpacity={1} onPress={() => setActiveModal(null)} style={styles.modalOverlay}>
+          <TouchableOpacity activeOpacity={1} style={[styles.modalSheet, { paddingBottom: Math.max(insets.bottom, 24) }]}>
+            <View style={styles.modalCloseContainer}>
+              <TouchableOpacity onPress={() => setActiveModal(null)} style={styles.closeButton}>
                 <X color="#9ca3af" size={20} />
               </TouchableOpacity>
             </View>
 
-            {/* Dynamic Modal Body */}
-            {renderModalContent()}
+            {activeModal === '1' && (
+              <View>
+                <Text style={styles.modalHeading}>แก้ไขข้อมูลส่วนตัว</Text>
+                <Text style={styles.fieldLabel}>ชื่อ - นามสกุล</Text>
+                <View style={styles.textInputBox}>
+                  <TextInput value={editName} onChangeText={setEditName} placeholder="ระบุชื่อของคุณ" style={styles.textInput} />
+                </View>
+                <Text style={styles.fieldLabel}>Username (ไม่สามารถเปลี่ยนได้)</Text>
+                <View style={styles.disabledInputBox}>
+                  <Text style={styles.disabledText}>@{profile.username}</Text>
+                </View>
+                <Text style={styles.fieldLabel}>อีเมล</Text>
+                <View style={styles.textInputBox}>
+                  <TextInput value={editEmail} onChangeText={setEditEmail} placeholder="ระบุอีเมล" keyboardType="email-address" autoCapitalize="none" style={styles.textInput} />
+                </View>
+                <TouchableOpacity onPress={handleSaveProfile} style={styles.primaryModalButton}>
+                  <Text style={styles.primaryButtonText}>บันทึกข้อมูล</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {activeModal === '2' && (
+              <View>
+                <Text style={styles.modalHeading}>ตั้งค่าการแจ้งเตือน</Text>
+                <View style={styles.switchRow}>
+                  <View>
+                    <Text style={styles.switchTitle}>การนัดหมาย</Text>
+                    <Text style={styles.switchSubtitle}>เตือนเมื่อถึงเวลานัดหมายหรือมีการอัปเดต</Text>
+                  </View>
+                  <Switch value={notiAppointments} onValueChange={setNotiAppointments} trackColor={{ false: '#d1d5db', true: '#468f92' }} />
+                </View>
+                <View style={styles.switchRow}>
+                  <View>
+                    <Text style={styles.switchTitle}>กลุ่มและการเชิญ</Text>
+                    <Text style={styles.switchSubtitle}>เตือนเมื่อมีการเชิญเข้ากลุ่มใหม่</Text>
+                  </View>
+                  <Switch value={notiGroups} onValueChange={setNotiGroups} trackColor={{ false: '#d1d5db', true: '#468f92' }} />
+                </View>
+                <TouchableOpacity onPress={() => setActiveModal(null)} style={styles.primaryModalButton}>
+                  <Text style={styles.primaryButtonText}>ตกลง</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {activeModal === '3' && (
+              <View>
+                <Text style={styles.modalHeading}>ความเป็นส่วนตัวและความปลอดภัย</Text>
+                <View style={styles.switchRow}>
+                  <View style={styles.flexOne}>
+                    <Text style={styles.switchTitle}>โหมดส่วนตัว</Text>
+                    <Text style={styles.switchSubtitle}>ซ่อนสถานะความว่างจากเพื่อนในกลุ่ม</Text>
+                  </View>
+                  <Switch value={isPrivate} onValueChange={setIsPrivate} trackColor={{ false: '#d1d5db', true: '#3caea3' }} />
+                </View>
+                <TouchableOpacity onPress={() => { setActiveModal(null); Alert.alert('ส่งอีเมลแล้ว', 'ส่งลิงก์เปลี่ยนรหัสผ่านไปยังอีเมลของคุณแล้ว'); }} style={styles.linkRow}>
+                  <Lock size={18} color="#374151" style={styles.iconMargin} />
+                  <Text style={styles.linkRowText}>เปลี่ยนรหัสผ่าน</Text>
+                  <ChevronRight color="#9ca3af" size={18} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setActiveModal(null)} style={[styles.primaryModalButton, styles.tealBg]}>
+                  <Text style={styles.primaryButtonText}>ปิด</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {activeModal === '4' && (
+              <View>
+                <Text style={styles.modalHeading}>ช่วยเหลือและสนับสนุน</Text>
+                <TouchableOpacity style={styles.linkRow}>
+                  <HelpCircle size={18} color="#a388cd" style={styles.iconMargin} />
+                  <Text style={styles.linkRowText}>คำถามที่พบบ่อย (FAQ)</Text>
+                  <ChevronRight color="#9ca3af" size={18} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => Alert.alert('ติดต่อเรา', 'ส่งข้อความหาเราได้ที่ support@friends-calendar.app')} style={styles.linkRow}>
+                  <Mail size={18} color="#a388cd" style={styles.iconMargin} />
+                  <Text style={styles.linkRowText}>ติดต่อฝ่ายสนับสนุน</Text>
+                  <ChevronRight color="#9ca3af" size={18} />
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setActiveModal(null)} style={styles.primaryModalButton}>
+                  <Text style={styles.primaryButtonText}>ตกลง</Text>
+                </TouchableOpacity>
+              </View>
+            )}
           </TouchableOpacity>
         </TouchableOpacity>
       </Modal>
-
     </View>
   );
 }
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#cce1de' },
+  loaderContainer: { flex: 1, backgroundColor: '#cce1de', justifyContent: 'center', alignItems: 'center' },
+  header: {
+    backgroundColor: '#468f92',
+    paddingHorizontal: 20,
+    paddingBottom: 28,
+    borderBottomLeftRadius: 28,
+    borderBottomRightRadius: 28,
+    alignItems: 'center'
+  },
+  avatarContainer: { position: 'relative', marginBottom: 12 },
+  avatarImage: { width: 88, height: 88, borderRadius: 44, borderWidth: 3, borderColor: '#ffffff' },
+  avatarLoaderOverlay: { position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, backgroundColor: 'rgba(0,0,0,0.4)', borderRadius: 44, justifyContent: 'center', alignItems: 'center' },
+  cameraButton: {
+    position: 'absolute',
+    bottom: 0,
+    right: 0,
+    backgroundColor: '#1C4E4E',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 2,
+    borderColor: '#ffffff',
+    justifyContent: 'center',
+    alignItems: 'center',
+    elevation: 3
+  },
+  profileName: { color: '#ffffff', fontSize: 18, fontWeight: 'bold', marginBottom: 2, textAlign: 'center' },
+  profileUsername: { fontWeight: 'normal', fontSize: 15, color: 'rgba(255,255,255,0.9)' },
+  profileEmail: { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginBottom: 10 },
+  friendCodeBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(28, 78, 78, 0.4)', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 12, gap: 6 },
+  friendCodeText: { color: '#ffffff', fontSize: 11, fontWeight: '600' },
+  menuList: { marginHorizontal: 20, marginTop: 20, backgroundColor: '#ffffff', borderRadius: 20, padding: 8 },
+  menuItem: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingVertical: 14, paddingHorizontal: 12, borderColor: '#f3f4f6' },
+  menuItemLeft: { flexDirection: 'row', alignItems: 'center' },
+  menuIconContainer: { width: 36, height: 36, borderRadius: 18, alignItems: 'center', justifyContent: 'center', marginRight: 12 },
+  menuItemTitle: { fontSize: 13, fontWeight: 'bold', color: '#374151' },
+  logoutButton: { marginHorizontal: 20, marginTop: 16, marginBottom: 28, backgroundColor: '#ffffff', borderRadius: 16, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', justifyContent: 'center' },
+  logoutText: { fontSize: 13, fontWeight: 'bold', color: '#f87171', marginLeft: 8 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0, 0, 0, 0.4)', justifyContent: 'flex-end' },
+  modalSheet: { backgroundColor: '#ffffff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24 },
+  modalCloseContainer: { alignItems: 'flex-end', marginBottom: 8 },
+  closeButton: { padding: 4 },
+  modalHeading: { fontSize: 18, fontWeight: 'bold', color: '#374151', marginBottom: 16 },
+  fieldLabel: { fontSize: 12, fontWeight: 'bold', color: '#6b7280', marginBottom: 6 },
+  textInputBox: { backgroundColor: '#f3f4f6', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 12 },
+  textInput: { fontSize: 14, color: '#374151' },
+  disabledInputBox: { backgroundColor: '#e5e7eb', borderRadius: 12, paddingHorizontal: 12, height: 44, justifyContent: 'center', marginBottom: 12 },
+  disabledText: { fontSize: 14, color: '#9ca3af' },
+  primaryModalButton: { backgroundColor: '#468f92', borderRadius: 12, height: 46, justifyContent: 'center', alignItems: 'center', marginTop: 16 },
+  tealBg: { backgroundColor: '#3caea3' },
+  primaryButtonText: { color: '#ffffff', fontWeight: 'bold', fontSize: 14 },
+  switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingVertical: 12, borderBottomWidth: 1, borderColor: '#f3f4f6' },
+  switchTitle: { fontSize: 14, fontWeight: 'bold', color: '#374151' },
+  switchSubtitle: { fontSize: 11, color: '#9ca3af', marginTop: 2 },
+  flexOne: { flex: 1, marginRight: 8 },
+  linkRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 14, borderBottomWidth: 1, borderColor: '#f3f4f6' },
+  iconMargin: { marginRight: 10 },
+  linkRowText: { fontSize: 14, fontWeight: 'bold', color: '#374151', flex: 1 }
+});

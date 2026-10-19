@@ -1,21 +1,7 @@
-import React, { useState } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  ScrollView,
-  TextInput,
-  Image,
-  Switch,
-  Alert,
-  StatusBar,
-  Platform
-} from 'react-native';
+import DateTimePicker, { DateTimePickerChangeEvent } from '@react-native-community/datetimepicker';
 import { useRouter } from 'expo-router';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   ArrowLeft,
-  Bell,
   Briefcase,
   Calendar,
   Check,
@@ -33,16 +19,29 @@ import {
   Users,
   X
 } from 'lucide-react-native';
+import React, { useCallback, useEffect, useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Platform,
+  ScrollView,
+  StatusBar,
+  Switch,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { apiFetch } from '../../services/api';
 
-// ---------------------------------------------------------------------------
-// Design tokens
-// ---------------------------------------------------------------------------
 const COLORS = {
   bg: '#eef5f4',
   headerBg: '#1f5254',
-  primary: '#1f5254',        // ปุ่มหลัก / checkbox / switch
+  primary: '#1f5254',
   primarySoft: '#e3eeed',
-  select: '#f5b83c',         // สีเหลืองอำพัน ใช้กับตัวเลือกย่อยทั่วไป (นัดกับใคร, รายละเอียดนัดหมาย)
+  select: '#f5b83c',
   selectSoft: '#fdf1da',
   danger: '#ef4444',
   card: '#ffffff',
@@ -53,7 +52,6 @@ const COLORS = {
   neutralOutline: '#d7e2e1'
 };
 
-// สีประจำประเภทนัดหมายแต่ละแบบ
 const CATEGORIES = [
   { key: 'food', label: 'นัดกินข้าว / กาแฟ', color: '#f2a541', Icon: Coffee },
   { key: 'trip', label: 'นัดเที่ยว / กรุ๊ป', color: '#e2572b', Icon: Plane },
@@ -71,26 +69,36 @@ const cardShadow = {
   elevation: 2
 };
 
-interface InvitedFriend {
+export interface InvitedFriend {
   id: string;
   name: string;
   avatar: string;
   selected: boolean;
 }
 
-const INITIAL_FRIENDS: InvitedFriend[] = [
-  { id: '1', name: 'เจดน์', avatar: 'https://picsum.photos/seed/m1/100', selected: true },
-  { id: '2', name: 'มินท์', avatar: 'https://picsum.photos/seed/m2/100', selected: true },
-  { id: '3', name: 'เป้', avatar: 'https://picsum.photos/seed/m3/100', selected: true },
-  { id: '4', name: 'ส้ม', avatar: 'https://picsum.photos/seed/m4/100', selected: true },
-];
+export interface GroupOption {
+  id: string;
+  name: string;
+}
 
-const GROUP_OPTIONS = ['แก๊งเที่ยว 8 คน', 'เพื่อนซี้ 4 คน', 'ทีมงานโปรเจกต์', 'ครอบครัว'];
 const RECURRING_OPTIONS = ['ไม่ทำซ้ำ', 'ทำซ้ำทุกวัน', 'ทำซ้ำทุกสัปดาห์', 'ทำซ้ำทุกเดือน'];
 
-// ---------------------------------------------------------------------------
-// Reusable pieces
-// ---------------------------------------------------------------------------
+// ฟังก์ชันแปลง Date เป็นข้อความภาษาไทย
+const formatDateThai = (date: Date) => {
+  return date.toLocaleDateString('th-TH', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric'
+  });
+};
+
+const formatTimeThai = (date: Date) => {
+  return date.toLocaleTimeString('th-TH', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  });
+};
 
 function SectionLabel({ number, children, hint }: { number: number; children: React.ReactNode; hint?: string }) {
   return (
@@ -175,6 +183,44 @@ function FieldInput({
   );
 }
 
+// ปุ่มสำหรับเปิด Date/Time Picker แบบเลื่อน
+function DatePickerButton({
+  icon,
+  value,
+  placeholder,
+  onPress
+}: {
+  icon?: React.ReactNode;
+  value: string;
+  placeholder: string;
+  onPress: () => void;
+}) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.85}
+      style={{
+        flexDirection: 'row',
+        alignItems: 'center',
+        backgroundColor: COLORS.card,
+        borderRadius: 14,
+        borderWidth: 1,
+        borderColor: COLORS.border,
+        paddingHorizontal: 14,
+        paddingVertical: 12,
+        marginBottom: 12,
+        ...cardShadow
+      }}
+    >
+      {icon ? <View style={{ marginRight: 8 }}>{icon}</View> : null}
+      <Text style={{ flex: 1, fontSize: 13, color: value ? COLORS.textPrimary : COLORS.textMuted }}>
+        {value || placeholder}
+      </Text>
+      <ChevronDown color={COLORS.textMuted} size={16} />
+    </TouchableOpacity>
+  );
+}
+
 function SelectField({
   icon,
   value,
@@ -185,7 +231,7 @@ function SelectField({
   icon?: React.ReactNode;
   value: string | null;
   placeholder: string;
-  options: string[];
+  options: { label: string; value: string }[];
   onSelect: (v: string) => void;
 }) {
   const openPicker = () => {
@@ -193,11 +239,14 @@ function SelectField({
       placeholder,
       undefined,
       [
-        ...options.map(o => ({ text: o, onPress: () => onSelect(o) })),
+        ...options.map(o => ({ text: o.label, onPress: () => onSelect(o.value) })),
         { text: 'ยกเลิก', style: 'cancel' as const }
       ]
     );
   };
+  const selectedLabel = options.find(o => o.value === value)?.label || value;
+
+
   return (
     <TouchableOpacity
       onPress={openPicker}
@@ -216,8 +265,8 @@ function SelectField({
       }}
     >
       {icon ? <View style={{ marginRight: 8 }}>{icon}</View> : null}
-      <Text style={{ flex: 1, fontSize: 13, color: value ? COLORS.textPrimary : COLORS.textMuted }}>
-        {value || placeholder}
+      <Text style={{ flex: 1, fontSize: 13, color: selectedLabel ? COLORS.textPrimary : COLORS.textMuted }}>
+        {selectedLabel || placeholder}
       </Text>
       <ChevronDown color={COLORS.textMuted} size={16} />
     </TouchableOpacity>
@@ -316,10 +365,6 @@ function ToggleRow({
   );
 }
 
-// ---------------------------------------------------------------------------
-// Main screen
-// ---------------------------------------------------------------------------
-
 export default function CreateAppointmentScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
@@ -329,10 +374,11 @@ export default function CreateAppointmentScreen() {
 
   // นัดกับใคร
   const [withWho, setWithWho] = useState<'individual' | 'group'>('individual');
-  const [friends, setFriends] = useState<InvitedFriend[]>(INITIAL_FRIENDS);
+  const [friends, setFriends] = useState<InvitedFriend[]>([]);
+  const [groups, setGroups] = useState<GroupOption[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string | null>(null);
 
-  // รายละเอียดนัดหมาย (แปรผันตามประเภท)
+  // รายละเอียดนัดหมาย
   const [tripType, setTripType] = useState<'day' | 'multi'>('day');
   const [meetingMode, setMeetingMode] = useState<'online' | 'inperson'>('inperson');
   const [location, setLocation] = useState('');
@@ -341,54 +387,178 @@ export default function CreateAppointmentScreen() {
   const [topic, setTopic] = useState('');
   const [meetingLink, setMeetingLink] = useState('');
 
-  // วันที่และเวลา
+  // วันที่และเวลา (State สำหรับเก็บวัตถุ Date)
+  const [dateVal, setDateVal] = useState<Date>(new Date());
+  const [startTimeVal, setStartTimeVal] = useState<Date>(new Date());
+  const [endTimeVal, setEndTimeVal] = useState<Date>(new Date());
+  const [startDateVal, setStartDateVal] = useState<Date>(new Date());
+  const [endDateVal, setEndDateVal] = useState<Date>(new Date());
+
+  // String ที่พร้อมแสดงผลและส่ง API
+  const [dateText, setDateText] = useState(formatDateThai(new Date()));
+  const [startTime, setStartTime] = useState(formatTimeThai(new Date()));
+  const [endTime, setEndTime] = useState(formatTimeThai(new Date()));
+  const [startDate, setStartDate] = useState(formatDateThai(new Date()));
+  const [endDate, setEndDate] = useState(formatDateThai(new Date()));
+
   const [appDecide, setAppDecide] = useState(true);
-  const [dateText, setDateText] = useState('เสาร์ที่ 21 ก.พ. 2026');
-  const [startTime, setStartTime] = useState('18:00');
-  const [endTime, setEndTime] = useState('21:00');
-  const [startDate, setStartDate] = useState('');
-  const [endDate, setEndDate] = useState('');
   const [duration, setDuration] = useState('');
   const [notes, setNotes] = useState('');
   const [recurring, setRecurring] = useState<string | null>(null);
 
-  // ท้ายฟอร์ม
+  // Control สำหรับ DateTimePicker
+  const [pickerTarget, setPickerTarget] = useState<'dateText' | 'startTime' | 'endTime' | 'startDate' | 'endDate' | null>(null);
+  const [pickerMode, setPickerMode] = useState<'date' | 'time'>('date');
+
+  // สถานะและตัวเลือกอื่น
   const [voteEnabled, setVoteEnabled] = useState(true);
   const [notifyEnabled, setNotifyEnabled] = useState(true);
+  const [isLoadingData, setIsLoadingData] = useState(true);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  // โหลดรายชื่อเพื่อนและกลุ่มจาก API
+  const fetchInitialData = useCallback(async () => {
+    try {
+      setIsLoadingData(true);
+      const [friendsRes, groupsRes] = await Promise.all([
+        apiFetch<any[]>('/api/friends').catch(() => []),
+        apiFetch<any[]>('/api/groups').catch(() => [])
+      ]);
+
+      if (friendsRes) {
+        setFriends(friendsRes.map(f => ({ id: f.id, name: f.name, avatar: f.avatar, selected: false })));
+      }
+      if (groupsRes) {
+        setGroups(groupsRes.map(g => ({ id: g.id, name: g.name })));
+      }
+    } catch (error) {
+      console.error('Error loading initial data:', error);
+    } finally {
+      setIsLoadingData(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchInitialData();
+  }, [fetchInitialData]);
 
   const toggleFriend = (id: string) => {
     setFriends(prev => prev.map(f => (f.id === id ? { ...f, selected: !f.selected } : f)));
   };
 
   const handleAddFriend = () => {
-    Alert.alert('เชิญเพื่อน', 'เลือกเพื่อนเพิ่มเติมจากรายชื่อกลุ่มของคุณ', [
-      { text: 'ไปที่กลุ่ม', onPress: () => router.push('/groups') },
-      { text: 'ปิด', style: 'cancel' }
-    ]);
+    router.push('/groups');
+  };
+
+  const handlePickerChange = (event: DateTimePickerChangeEvent, selectedDate?: Date) => {
+    if (Platform.OS === 'android') {
+      setPickerTarget(null); // ปิด Picker บน Android หลังเลือกเสร็จ
+    }
+
+    if (selectedDate) {
+      switch (pickerTarget) {
+        case 'dateText':
+          setDateVal(selectedDate);
+          setDateText(formatDateThai(selectedDate));
+          break;
+        case 'startTime':
+          setStartTimeVal(selectedDate);
+          setStartTime(formatTimeThai(selectedDate));
+          break;
+        case 'endTime':
+          setEndTimeVal(selectedDate);
+          setEndTime(formatTimeThai(selectedDate));
+          break;
+        case 'startDate':
+          setStartDateVal(selectedDate);
+          setStartDate(formatDateThai(selectedDate));
+          break;
+        case 'endDate':
+          setEndDateVal(selectedDate);
+          setEndDate(formatDateThai(selectedDate));
+          break;
+      }
+    }
+  };
+
+  const openPicker = (target: 'dateText' | 'startTime' | 'endTime' | 'startDate' | 'endDate', mode: 'date' | 'time') => {
+    setPickerTarget(target);
+    setPickerMode(mode);
+  };
+
+  const getPickerValue = () => {
+    switch (pickerTarget) {
+      case 'dateText': return dateVal;
+      case 'startTime': return startTimeVal;
+      case 'endTime': return endTimeVal;
+      case 'startDate': return startDateVal;
+      case 'endDate': return endDateVal;
+      default: return new Date();
+    }
   };
 
   const isSolo = category === 'personal';
-  const activeCategory = CATEGORIES.find(c => c.key === category)!;
 
-  const handleSubmit = () => {
+  // ส่งข้อมูลสร้างนัดหมายไปยัง Fastify API
+  const handleSubmit = async () => {
     if (!title.trim()) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุชื่อกิจกรรมก่อน');
       return;
     }
-    if (!location.trim()) {
+
+    if ((category !== 'work' || meetingMode === 'inperson' || isSolo) && !location.trim()) {
       Alert.alert('กรอกข้อมูลไม่ครบ', 'กรุณาระบุสถานที่นัดหมาย');
       return;
     }
-    Alert.alert(
-      'สำเร็จ 🎉',
-      isSolo ? 'สร้างนัดหมายเรียบร้อยแล้ว' : 'ส่งคำเชิญนัดหมายเรียบร้อยแล้ว',
-      [{ text: 'ตกลง', onPress: () => router.back() }]
-    );
+
+    try {
+      setIsSubmitting(true);
+      const selectedFriendIds = friends.filter(f => f.selected).map(f => f.id);
+
+      const payload = {
+        title: title.trim(),
+        category,
+        withWho: isSolo ? 'solo' : withWho,
+        groupId: withWho === 'group' ? selectedGroup : null,
+        invitedFriendIds: withWho === 'individual' ? selectedFriendIds : [],
+        tripType,
+        meetingMode,
+        startTime,
+        endTime,
+        location: location.trim(),
+        budget: budget.trim(),
+        accommodation: accommodation.trim(),
+        topic: topic.trim(),
+        meetingLink: meetingLink.trim(),
+        appDecide,
+        dateText,
+        startDate,
+        endDate,
+        duration,
+        notes: notes.trim(),
+        recurring,
+        voteEnabled: isSolo ? false : voteEnabled,
+        notifyEnabled
+      };
+
+
+      await apiFetch('/api/appointments', {
+        method: 'POST',
+        body: JSON.stringify(payload)
+      });
+
+      Alert.alert(
+        'สำเร็จ 🎉',
+        isSolo ? 'สร้างนัดหมายเรียบร้อยแล้ว' : 'ส่งคำเชิญนัดหมายเรียบร้อยแล้ว',
+        [{ text: 'ตกลง', onPress: () => router.back() }]
+      );
+    } catch (error: any) {
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถสร้างนัดหมายได้');
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
-  const invitedCount = friends.filter(f => f.selected).length;
-
-  // นับเลขหัวข้อให้เรียงถูกต้องอัตโนมัติ แม้บางส่วนจะถูกซ่อนไปตามประเภทนัดหมาย
   let sectionCounter = 1;
   const nextSection = () => sectionCounter++;
 
@@ -434,7 +604,7 @@ export default function CreateAppointmentScreen() {
         <FieldInput
           value={title}
           onChangeText={setTitle}
-          placeholder="ชวนกับชาวแก๊งค์"
+          placeholder="ชื่อกิจกรรม / หัวข้อนัดหมาย"
           icon={<Smile color={COLORS.textMuted} size={16} />}
         />
         <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 18 }}>
@@ -451,7 +621,7 @@ export default function CreateAppointmentScreen() {
           ))}
         </View>
 
-        {/* 2. นัดกับใคร (ซ่อนสำหรับนัดหมายส่วนตัว) */}
+        {/* 2. นัดกับใคร */}
         {!isSolo && (
           <>
             <SectionLabel number={nextSection()}>นัดกับใคร</SectionLabel>
@@ -482,89 +652,92 @@ export default function CreateAppointmentScreen() {
                   icon={<Users color={COLORS.textMuted} size={16} />}
                   value={selectedGroup}
                   placeholder="เลือกกลุ่มเพื่อนที่เชิญ"
-                  options={GROUP_OPTIONS}
+                  options={groups.map(g => ({ label: g.name, value: g.id }))}
                   onSelect={setSelectedGroup}
                 />
               </View>
             ) : (
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 18 }}>
-                {friends.map(f => (
-                  <TouchableOpacity
-                    key={f.id}
-                    onPress={() => toggleFriend(f.id)}
-                    activeOpacity={0.8}
-                    style={{ alignItems: 'center', marginRight: 16, opacity: f.selected ? 1 : 0.4 }}
-                  >
-                    <View>
-                      <Image
-                        source={{ uri: f.avatar }}
+              <View style={{ marginBottom: 18 }}>
+                {isLoadingData ? (
+                  <ActivityIndicator color={COLORS.primary} size="small" style={{ marginVertical: 10 }} />
+                ) : (
+                  <ScrollView horizontal showsHorizontalScrollIndicator={false}>
+                    {friends.map(f => (
+                      <TouchableOpacity
+                        key={f.id}
+                        onPress={() => toggleFriend(f.id)}
+                        activeOpacity={0.8}
+                        style={{ alignItems: 'center', marginRight: 16, opacity: f.selected ? 1 : 0.4 }}
+                      >
+                        <View>
+                          <Image
+                            source={{ uri: f.avatar }}
+                            style={{
+                              width: 50,
+                              height: 50,
+                              borderRadius: 25,
+                              marginBottom: 6,
+                              borderWidth: f.selected ? 2 : 0,
+                              borderColor: COLORS.select
+                            }}
+                          />
+                          {f.selected && (
+                            <View
+                              style={{
+                                position: 'absolute',
+                                bottom: 4,
+                                right: -2,
+                                width: 17,
+                                height: 17,
+                                borderRadius: 9,
+                                backgroundColor: COLORS.danger,
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                borderWidth: 1.5,
+                                borderColor: '#ffffff'
+                              }}
+                            >
+                              <X color="#ffffff" size={10} strokeWidth={3} />
+                            </View>
+                          )}
+                        </View>
+                        <Text style={{ fontSize: 11, fontWeight: '600', color: COLORS.textSecondary }}>{f.name}</Text>
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity onPress={handleAddFriend} activeOpacity={0.85} style={{ alignItems: 'center' }}>
+                      <View
                         style={{
                           width: 50,
                           height: 50,
                           borderRadius: 25,
-                          marginBottom: 6,
-                          borderWidth: f.selected ? 2 : 0,
-                          borderColor: COLORS.select
+                          backgroundColor: COLORS.selectSoft,
+                          borderWidth: 1.5,
+                          borderColor: COLORS.select,
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          marginBottom: 6
                         }}
-                      />
-                      {f.selected && (
-                        <View
-                          style={{
-                            position: 'absolute',
-                            bottom: 4,
-                            right: -2,
-                            width: 17,
-                            height: 17,
-                            borderRadius: 9,
-                            backgroundColor: COLORS.danger,
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            borderWidth: 1.5,
-                            borderColor: '#ffffff'
-                          }}
-                        >
-                          <X color="#ffffff" size={10} strokeWidth={3} />
-                        </View>
-                      )}
-                    </View>
-                    <Text style={{ fontSize: 11, fontWeight: '600', color: COLORS.textSecondary }}>{f.name}</Text>
-                  </TouchableOpacity>
-                ))}
-                <TouchableOpacity onPress={handleAddFriend} activeOpacity={0.85} style={{ alignItems: 'center' }}>
-                  <View
-                    style={{
-                      width: 50,
-                      height: 50,
-                      borderRadius: 25,
-                      backgroundColor: COLORS.selectSoft,
-                      borderWidth: 1.5,
-                      borderColor: COLORS.select,
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      marginBottom: 6
-                    }}
-                  >
-                    <Plus color={COLORS.select} size={20} strokeWidth={2.5} />
-                  </View>
-                  <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.select }}>เพิ่มเพื่อน</Text>
-                </TouchableOpacity>
-              </ScrollView>
+                      >
+                        <Plus color={COLORS.select} size={20} strokeWidth={2.5} />
+                      </View>
+                      <Text style={{ fontSize: 11, fontWeight: '700', color: COLORS.select }}>เพิ่มเพื่อน</Text>
+                    </TouchableOpacity>
+                  </ScrollView>
+                )}
+              </View>
             )}
           </>
         )}
 
-        {/* 3. รายละเอียดนัดหมาย (แปรผันตามประเภท) */}
-        <SectionLabel
-          number={nextSection()}
-          hint={isSolo ? undefined : undefined}
-        >
+        {/* 3. รายละเอียดนัดหมาย */}
+        <SectionLabel number={nextSection()}>
           {isSolo
             ? 'รายละเอียด'
             : category === 'trip'
-            ? 'รายละเอียดนัดหมาย (ทริปเที่ยว)'
-            : category === 'work'
-            ? 'รายละเอียดนัดหมาย (การประชุม)'
-            : 'รายละเอียดนัดหมาย (ร้านอาหาร/สถานที่)'}
+              ? 'รายละเอียดนัดหมาย (ทริปเที่ยว)'
+              : category === 'work'
+                ? 'รายละเอียดนัดหมาย (การประชุม)'
+                : 'รายละเอียดนัดหมาย (ร้านอาหาร/สถานที่)'}
         </SectionLabel>
 
         {category === 'trip' && !isSolo && (
@@ -588,7 +761,7 @@ export default function CreateAppointmentScreen() {
           </View>
         )}
 
-        {(category === 'work') && !isSolo && (
+        {category === 'work' && !isSolo && (
           <View style={{ flexDirection: 'row', gap: 10, marginBottom: 12 }}>
             <View style={{ flex: 1 }}>
               <Pill
@@ -625,7 +798,7 @@ export default function CreateAppointmentScreen() {
           <FieldInput
             value={location}
             onChangeText={setLocation}
-            placeholder="เช่น Shabu Baru, Siam Paragon ชั้น 4"
+            placeholder="สถานที่นัดหมาย"
             icon={<MapPin color={COLORS.textMuted} size={16} />}
           />
         )}
@@ -644,7 +817,7 @@ export default function CreateAppointmentScreen() {
 
         <View style={{ marginBottom: 6 }} />
 
-        {/* วันที่และเวลานัดหมาย */}
+        {/* 4. วันที่และเวลานัดหมาย */}
         <SectionLabel number={nextSection()}>วันที่และเวลานัดหมาย</SectionLabel>
 
         {!isSolo && (
@@ -658,18 +831,18 @@ export default function CreateAppointmentScreen() {
 
         {isSolo ? (
           <>
-            <FieldInput
-              value={dateText}
-              onChangeText={setDateText}
-              placeholder="วันที่นัดหมาย"
+            <DatePickerButton
               icon={<Calendar color={COLORS.textMuted} size={16} />}
+              value={dateText}
+              placeholder="เลือกวันที่นัดหมาย"
+              onPress={() => openPicker('dateText', 'date')}
             />
             <FieldInput value={notes} onChangeText={setNotes} placeholder="หมายเหตุ / สิ่งที่ต้องเตรียมไป" />
             <SelectField
               icon={<Repeat color={COLORS.textMuted} size={16} />}
               value={recurring}
               placeholder="ทำประจำ"
-              options={RECURRING_OPTIONS}
+              options={RECURRING_OPTIONS.map(o => ({ label: o, value: o }))}
               onSelect={setRecurring}
             />
           </>
@@ -677,19 +850,19 @@ export default function CreateAppointmentScreen() {
           <>
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 1 }}>
-                <FieldInput
-                  value={startDate}
-                  onChangeText={setStartDate}
-                  placeholder="วันเดินทางไป"
+                <DatePickerButton
                   icon={<Calendar color={COLORS.textMuted} size={16} />}
+                  value={startDate}
+                  placeholder="วันเดินทางไป"
+                  onPress={() => openPicker('startDate', 'date')}
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput
-                  value={endDate}
-                  onChangeText={setEndDate}
-                  placeholder="วันเดินทางกลับ"
+                <DatePickerButton
                   icon={<Calendar color={COLORS.textMuted} size={16} />}
+                  value={endDate}
+                  placeholder="วันเดินทางกลับ"
+                  onPress={() => openPicker('endDate', 'date')}
                 />
               </View>
             </View>
@@ -698,27 +871,27 @@ export default function CreateAppointmentScreen() {
           </>
         ) : (
           <>
-            <FieldInput
-              value={dateText}
-              onChangeText={setDateText}
-              placeholder="วันที่นัดหมาย"
+            <DatePickerButton
               icon={<Calendar color={COLORS.textMuted} size={16} />}
+              value={dateText}
+              placeholder="เลือกวันที่นัดหมาย"
+              onPress={() => openPicker('dateText', 'date')}
             />
             <View style={{ flexDirection: 'row', gap: 10 }}>
               <View style={{ flex: 1 }}>
-                <FieldInput
-                  value={startTime}
-                  onChangeText={setStartTime}
-                  placeholder="เวลาเริ่ม"
+                <DatePickerButton
                   icon={<Clock color={COLORS.textMuted} size={16} />}
+                  value={startTime}
+                  placeholder="เวลาเริ่ม"
+                  onPress={() => openPicker('startTime', 'time')}
                 />
               </View>
               <View style={{ flex: 1 }}>
-                <FieldInput
-                  value={endTime}
-                  onChangeText={setEndTime}
-                  placeholder="เวลาสิ้นสุด"
+                <DatePickerButton
                   icon={<Clock color={COLORS.textMuted} size={16} />}
+                  value={endTime}
+                  placeholder="เวลาสิ้นสุด"
+                  onPress={() => openPicker('endTime', 'time')}
                 />
               </View>
             </View>
@@ -747,6 +920,7 @@ export default function CreateAppointmentScreen() {
         {/* ปุ่มส่ง */}
         <TouchableOpacity
           onPress={handleSubmit}
+          disabled={isSubmitting}
           activeOpacity={0.88}
           style={{
             flexDirection: 'row',
@@ -762,17 +936,46 @@ export default function CreateAppointmentScreen() {
             elevation: 4
           }}
         >
-          {isSolo ? (
-            <Check color="#ffffff" size={16} style={{ marginRight: 8 }} />
+          {isSubmitting ? (
+            <ActivityIndicator color="#ffffff" size="small" />
           ) : (
-            <Send color="#ffffff" size={16} style={{ marginRight: 8 }} />
+            <>
+              {isSolo ? (
+                <Check color="#ffffff" size={16} style={{ marginRight: 8 }} />
+              ) : (
+                <Send color="#ffffff" size={16} style={{ marginRight: 8 }} />
+              )}
+              <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 15, letterSpacing: 0.2 }}>
+                {isSolo ? 'สร้าง' : 'ส่งคำเชิญนัดหมาย'}
+              </Text>
+            </>
           )}
-          <Text style={{ color: '#ffffff', fontWeight: '700', fontSize: 15, letterSpacing: 0.2 }}>
-            {isSolo ? 'สร้าง' : 'ส่งคำเชิญนัดหมาย'}
-          </Text>
         </TouchableOpacity>
 
       </ScrollView>
+
+      {/* DateTimePicker Modal สำหรับ iOS / Floating สำหรับ Android */}
+      {pickerTarget !== null && (
+        <View style={Platform.OS === 'ios' ? { backgroundColor: '#ffffff', paddingBottom: insets.bottom + 10, borderTopWidth: 1, borderColor: COLORS.border } : undefined}>
+          {Platform.OS === 'ios' && (
+            <TouchableOpacity
+              onPress={() => setPickerTarget(null)}
+              style={{ alignSelf: 'flex-end', paddingHorizontal: 20, paddingTop: 12, paddingBottom: 4 }}
+            >
+              <Text style={{ color: COLORS.primary, fontWeight: '700', fontSize: 15 }}>ตกลง</Text>
+            </TouchableOpacity>
+          )}
+          <DateTimePicker
+            value={getPickerValue()}
+            mode={pickerMode}
+            display={Platform.OS === 'ios' ? 'spinner' : 'default'}
+            onChange={handlePickerChange}
+            onDismiss={() => setPickerTarget(null)}
+            is24Hour
+            locale="th-TH"
+          />
+        </View>
+      )}
     </View>
   );
 }
