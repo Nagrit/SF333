@@ -91,21 +91,27 @@ export default function LoginScreen() {
         }),
       });
 
-      console.log('Login response received:', data ? 'Success' : 'Empty');
-
-      if (data?.token) {
-        await saveToken(data.token);
+      if (!data?.token) {
+        Alert.alert('ข้อผิดพลาด', 'ไม่พบ Token จากเซิร์ฟเวอร์ กรุณาเช็ก Response จาก Backend');
+        return;
       }
 
-      // ป้องกัน SecureStore error บล็อกกระบวนการ Login
+      // 1. เซฟ Token ลง SecureStore
+      console.log('1. Saving token...');
+      await saveToken(data.token);
+      console.log('2. Token saved successfully!');
+
+      // 2. เซฟข้อมูล User
       if (data?.user) {
         try {
           await SecureStore.setItemAsync('userInfo', JSON.stringify(data.user));
+          console.log('3. User info saved');
         } catch (storeError) {
-          console.warn('Failed to save userInfo to SecureStore:', storeError);
+          console.warn('Failed to save userInfo:', storeError);
         }
       }
 
+      // 3. จัดการ Remember Me
       if (rememberMe) {
         try {
           await SecureStore.setItemAsync('savedEmail', cleanEmail);
@@ -120,7 +126,8 @@ export default function LoginScreen() {
         }
       }
 
-      // เปลี่ยนหน้าไปยัง Main App Tabs
+      // 4. สั่งนำทางไปยังหน้าหลักครั้งเดียว
+      console.log('4. Navigating to (tabs)...');
       router.replace('/(tabs)');
     } catch (error: any) {
       console.error('Login error:', error);
@@ -182,7 +189,7 @@ export default function LoginScreen() {
                   fontSize: Math.max(15 * fontSizeBase, 14),
                 }}
               >
-                friends Calendar
+                Friends Calendar
               </Text>
 
               <View style={{ alignItems: 'center', marginTop: 4 }}>

@@ -34,7 +34,7 @@ import {
   View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { apiFetch } from '../../services/api';
+import { apiFetch, removeToken } from '../../services/api';
 
 export interface UserProfileData {
   id: string;
@@ -163,10 +163,20 @@ export default function ProfileScreen() {
         text: 'ออกจากระบบ',
         style: 'destructive',
         onPress: async () => {
-          await SecureStore.deleteItemAsync('userToken');
-          router.replace('/login');
-        }
-      }
+          try {
+            // 1. เคลียร์ Token ทั้งใน Memory Cache และ SecureStore
+            await removeToken();
+
+            // 2. เคลียร์ข้อมูล userInfo ที่เคยเซฟไว้ตอน Login
+            await SecureStore.deleteItemAsync('userInfo');
+
+            // 3. สั่งย้ายกลับหน้า Login
+            router.replace('/(auth)/login');
+          } catch (error) {
+            console.error('Logout error:', error);
+          }
+        },
+      },
     ]);
   };
 

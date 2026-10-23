@@ -1,4 +1,3 @@
-
 import * as SecureStore from 'expo-secure-store';
 import { Platform } from 'react-native';
 
@@ -6,10 +5,16 @@ const API_BASE_URL =
   process.env.EXPO_PUBLIC_API_URL || 'http://localhost:4000';
 
 // --------------------
+// In-Memory Token Cache (ป้องกัน Race Condition บน Android)
+// --------------------
+let inMemoryToken: string | null = null;
+
+// --------------------
 // Token Management
 // --------------------
 
 export async function saveToken(token: string): Promise<void> {
+  inMemoryToken = token; // บันทึกลง Memory ทันที
   if (Platform.OS === 'web') {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem('userToken', token);
@@ -21,16 +26,26 @@ export async function saveToken(token: string): Promise<void> {
 }
 
 export async function getToken(): Promise<string | null> {
-  if (Platform.OS === 'web') {
-    return typeof window !== 'undefined'
-      ? window.localStorage.getItem('userToken')
-      : null;
+  // อ่านจาก Memory ก่อนเพื่อความเร็วสูงสุด
+  if (inMemoryToken) {
+    return inMemoryToken;
   }
 
-  return SecureStore.getItemAsync('userToken');
+  if (Platform.OS === 'web') {
+    const webToken = typeof window !== 'undefined'
+      ? window.localStorage.getItem('userToken')
+      : null;
+    inMemoryToken = webToken;
+    return webToken;
+  }
+
+  const storedToken = await SecureStore.getItemAsync('userToken');
+  inMemoryToken = storedToken;
+  return storedToken;
 }
 
 export async function removeToken(): Promise<void> {
+  inMemoryToken = null; // ล้าง Memory
   if (Platform.OS === 'web') {
     if (typeof window !== 'undefined') {
       window.localStorage.removeItem('userToken');
@@ -43,7 +58,6 @@ export async function removeToken(): Promise<void> {
 
 // --------------------
 // API Fetch
-// Supports JSON and FormData
 // --------------------
 
 export async function apiFetch<T>(
@@ -62,7 +76,6 @@ export async function apiFetch<T>(
     options.body instanceof FormData;
 
   if (isFormData) {
-    // ให้ fetch สร้าง multipart boundary ให้อัตโนมัติ
     headers.delete('Content-Type');
   } else if (
     options.body != null &&
@@ -73,6 +86,8 @@ export async function apiFetch<T>(
 
   if (token) {
     headers.set('Authorization', `Bearer ${token}`);
+  } else {
+    console.warn(`⚠️ [apiFetch] Warning: No token found when calling ${endpoint}`);
   }
 
   try {
@@ -83,6 +98,7 @@ export async function apiFetch<T>(
     });
 
     if (response.status === 401) {
+      console.log(`❌ [apiFetch] 401 Unauthorized from: ${endpoint}`);
       await removeToken();
     }
 
@@ -107,7 +123,7 @@ export async function apiFetch<T>(
       error.name === 'AbortError'
     ) {
       throw new Error(
-        'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ (Network Timeout) กรุณาตรวจสอบ IP และการเชื่อมต่อ',
+        'ไม่สามารถเชื่อมต่อเซิร์ฟเวอร์ได้ (Network Timeout) กรุณาตรวจสอบการเชื่อมต่อ',
       );
     }
 
@@ -117,5 +133,4 @@ export async function apiFetch<T>(
   }
 }
 
-// Alias สำหรับโค้ดเดิมที่ใช้ fetchWithAuth
 export const fetchWithAuth = apiFetch;

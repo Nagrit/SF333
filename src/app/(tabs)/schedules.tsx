@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import {
   Briefcase,
   Check,
@@ -9,7 +9,7 @@ import {
   Search,
   User
 } from 'lucide-react-native';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -67,7 +67,7 @@ export default function SchedulesScreen() {
       if (!isPullToRefresh) setIsLoading(true);
       const data = await apiFetch<any[]>('/api/appointments');
 
-      // ✅ Map ข้อมูลจาก Backend ให้ตรงตาม Interface พร้อมค่า Fallback
+      // ✅ จุดที่แก้ 1: อ่านฟิลด์จาก Backend ให้ตรงตำแหน่ง
       const mappedAppointments: Appointment[] = (data || []).map((item: any) => {
         const isConfirmed = item.status === 'confirmed' || item.badge === 'ยืนยันแล้ว';
         
@@ -82,15 +82,15 @@ export default function SchedulesScreen() {
           id: item.id || String(Math.random()),
           time: formattedTime,
           title: item.title || 'นัดหมายไม่มีชื่อ',
-          group: item.group || item.groupName || 'กลุ่มทั่วไป',
+          group: item.groupName || item.group || 'กลุ่มทั่วไป',
           location: item.location || 'ไม่ระบุสถานที่',
           badge: isConfirmed ? 'ยืนยันแล้ว' : 'รอยืนยัน',
           categoryKey: item.categoryKey || item.category || 'food',
           category: item.categoryLabel || item.category || 'ทั่วไป',
           avatars: item.avatars || [],
           extraCount: item.extraCount || 0,
-          statusText: item.statusText || (isConfirmed ? 'สมาชิกตอบรับแล้ว' : 'รอยืนยันวันเวลา'),
-          dateHeader: item.dateHeader || item.startDate || ''
+          statusText: item.statusText || (isConfirmed ? 'ยืนยันการนัดแล้ว' : 'รอยืนยันวันเวลา'),
+          dateHeader: item.dateHeader || item.date || item.startDate || ''
         };
       });
 
@@ -103,9 +103,12 @@ export default function SchedulesScreen() {
     }
   }, []);
 
-  useEffect(() => {
-    fetchAppointments();
-  }, [fetchAppointments]);
+  // ✅ จุดที่แก้ 2: เปลี่ยนจาก useEffect เป็น useFocusEffect ดึงข้อมูลใหม่ทุกครั้งเมื่อเปิดหน้านี้
+  useFocusEffect(
+    useCallback(() => {
+      fetchAppointments();
+    }, [fetchAppointments])
+  );
 
   const onRefresh = () => {
     setRefreshing(true);

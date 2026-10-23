@@ -90,9 +90,11 @@ export default function IndexScreen() {
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<AppointmentStatus | null>(null);
 
-  // ดึงข้อมูลทั้งหมดจาก Fastify API
+  // ดึงข้อมูลทั้งหมดจาก API
   const fetchAllData = useCallback(async () => {
     try {
+      console.log('📡 [fetchAllData] Start fetching from Render...');
+
       const [userRes, appRes, pendingRes, statusRes] = await Promise.all([
         apiFetch<UserProfile>('/api/auth/me'),
         apiFetch<AppointmentItem[]>('/api/appointments'),
@@ -100,36 +102,35 @@ export default function IndexScreen() {
         apiFetch<Record<string, AppointmentStatus>>('/api/user-status')
       ]);
 
+      console.log('✅ [fetchAllData] User data received:', userRes?.name || 'No user name');
+
       if (userRes) setUserProfile(userRes);
       if (appRes) setAppointments(appRes);
       if (pendingRes) setPendingAppointments(pendingRes);
       if (statusRes) setDateStatuses(statusRes);
     } catch (error: any) {
-      console.error('Error fetching dashboard data:', error);
+      console.error('❌ [fetchAllData] Error details:', error?.message || error);
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
     }
   }, []);
 
+
+  // app/(tabs)/index.tsx
   useEffect(() => {
+    console.log('🏠 [tabs/index.tsx] Mounted! Fetching data...');
     fetchAllData();
-  }, [fetchAllData]);
+  }, []);
 
   const onRefresh = () => {
     setIsRefreshing(true);
     fetchAllData();
   };
 
-  const BUSY_THRESHOLD_HOURS = 24 * 0.7; // 16.8 ชั่วโมง
-  const HOUR_MS = 60 * 60 * 1000;
-
-  const getDayStatus = (
-    fullDate: string | null
-  ): AppointmentStatus => {
+  const getDayStatus = (fullDate: string | null): AppointmentStatus => {
     if (!fullDate) return 'green';
 
-    // สถานะที่ผู้ใช้ตั้งเองมีสิทธิ์เหนือสถานะอัตโนมัติ
     if (dateStatuses[fullDate]) {
       return dateStatuses[fullDate];
     }
@@ -148,7 +149,6 @@ export default function IndexScreen() {
         return total;
       }
 
-      // นับเฉพาะเวลานัดหมายที่ทับซ้อนกับวันที่กำลังตรวจสอบ
       const overlapStart = Math.max(start, dayStart);
       const overlapEnd = Math.min(end, dayEnd);
 
@@ -195,7 +195,6 @@ export default function IndexScreen() {
     scrollViewRef.current?.scrollTo({ y: 380, animated: true });
   };
 
-  // บันทึกสถานะวันด้วย Fastify API
   const handleSaveStatus = async () => {
     const previousStatuses = { ...dateStatuses };
     const newStatuses = { ...dateStatuses };
@@ -220,7 +219,7 @@ export default function IndexScreen() {
       });
     } catch (error: any) {
       setDateStatuses(previousStatuses);
-      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกสถานะได้ กรุณาลองใหม่อีกครั้ง');
+      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถบันทึกสถานะได้');
     } finally {
       setIsSavingStatus(false);
     }

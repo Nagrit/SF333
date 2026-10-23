@@ -1,8 +1,8 @@
 // server/src/routes/appointments.ts
-import { eq } from 'drizzle-orm';
+import { and, eq, inArray, or } from 'drizzle-orm';
 import { FastifyInstance } from 'fastify';
 import { db } from '../db';
-import { appointments, groups } from '../db/schema';
+import { appointments, friendGroupMembers, friendGroups, groups } from '../db/schema';
 
 function parseToDate(val: any): Date | null {
   if (!val) return null;
@@ -35,12 +35,10 @@ function toDateKey(value: unknown): string {
 
   const text = String(value).trim();
 
-  // วันที่ ISO ที่ไม่มีเวลา
   if (/^\d{4}-\d{2}-\d{2}$/.test(text)) {
     return text;
   }
 
-  // วันที่ ISO ที่มีเวลา
   const isoMatch = text.match(/^(\d{4}-\d{2}-\d{2})T/);
   if (isoMatch) {
     return isoMatch[1];
@@ -119,16 +117,61 @@ function addDaysToDateKey(dateKey: string, days: number): string {
   return `${y}-${m}-${d}`;
 }
 
+// ✅ จุดที่แก้ 1: ป้องกัน userId เป็น undefined หรือว่างเปล่า
+function extractUserId(request: any): string | null {
+  const u = request.user;
+  if (!u) return null;
+  const id = u.userId || u.id || u.sub;
+  return typeof id === 'string' && id.trim() !== '' ? id : null;
+}
+
+// ✅ จุดที่แก้ 2: ดึงทั้งกลุ่มที่เป็นสมาชิกและกลุ่มที่เป็นเจ้าของ (ownerId)
+async function getUserGroupIds(userId: string): Promise<string[]> {
+  const memberGroupRows = await db
+    .select({ groupId: friendGroupMembers.groupId })
+    .from(friendGroupMembers)
+    .where(eq(friendGroupMembers.userId, userId));
+
+  const ownedGroupRows = await db
+    .select({ groupId: friendGroups.id })
+    .from(friendGroups)
+    .where(eq(friendGroups.ownerId, userId));
+
+  const allIds = [
+    ...memberGroupRows.map((g) => g.groupId),
+    ...ownedGroupRows.map((g) => g.groupId),
+  ].filter((id): id is string => Boolean(id));
+
+  return Array.from(new Set(allIds));
+}
+
 export async function appointmentRoutes(fastify: FastifyInstance) {
   // 1. GET /api/appointments/pending
   fastify.get('/pending', async (request: any, reply) => {
     try {
       await request.jwtVerify();
+      const userId = extractUserId(request);
+
+      if (!userId) {
+        return reply.status(401).send({ message: 'Unauthorized: Missing User ID' });
+      }
+
+      const groupIds = await getUserGroupIds(userId);
+
+      const conditions = [eq(appointments.creatorId, userId)];
+      if (groupIds.length > 0) {
+        conditions.push(inArray(appointments.groupId, groupIds));
+      }
 
       const pendingAppointments = await db
         .select()
         .from(appointments)
-        .where(eq(appointments.status, 'pending'));
+        .where(
+          and(
+            eq(appointments.status, 'pending'),
+            or(...conditions)
+          )
+        );
 
       const formatted = await Promise.all(
         pendingAppointments.map(async (item) => {
@@ -162,9 +205,7 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
 
       return formatted;
     } catch (err) {
-      return reply.status(401).send({
-        message: 'Unauthorized',
-      });
+      return reply.status(401).send({ message: 'Unauthorized' });
     }
   });
 
@@ -172,13 +213,35 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
   fastify.get('/', async (request: any, reply) => {
     try {
       await request.jwtVerify();
-      const allAppointments = await db.select().from(appointments);
+      const userId = extractUserId(request);
 
-      const formatted = allAppointments.map((item) => {
+      // ✅ จุดที่แก้ 3: สกัดไว้ก่อน ป้องกันไม่ให้สั่ง Query แบบไม่ใส่เงื่อนไข
+      if (!userId) {
+        return reply.status(401).send({ message: 'Unauthorized: Missing User ID' });
+      }
+
+      const groupIds = await getUserGroupIds(userId);
+
+      // ✅ จุดที่แก้ 4: ใส่เงื่อนไขกรองเฉพาะ creatorId หรือ groupId ของผู้ใช้
+      const conditions = [eq(appointments.creatorId, userId)];
+      if (groupIds.length > 0) {
+        conditions.push(inArray(appointments.groupId, groupIds));
+      }
+
+      const myAppointments = await db
+        .select()
+        .from(appointments)
+        .where(or(...conditions));
+
+      const formatted = myAppointments.map((item) => {
         const isConfirmed = item.status === 'confirmed';
 
+        // ✅ จุดที่แก้ 5: เติม status, category, categoryKey กลับไปให้ Frontend ใช้
         return {
           id: item.id,
+          status: item.status,
+          category: item.category,
+          categoryKey: item.category,
           date: toDateKey(item.startDate),
           startAt: item.startAt
             ? new Date(item.startAt).toISOString()
@@ -188,10 +251,10 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
             : null,
           time: item.startAt
             ? new Date(item.startAt).toLocaleTimeString('th-TH', {
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false,
-            })
+                hour: '2-digit',
+                minute: '2-digit',
+                hour12: false,
+              })
             : '00:00',
           title: item.title,
           location: item.location || 'ไม่ระบุสถานที่',
@@ -239,7 +302,7 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
   fastify.get('/:id/vote', async (request: any, reply) => {
     try {
       await request.jwtVerify();
-      const userId = request.user.userId;
+      const userId = extractUserId(request);
       const { id } = request.params as { id: string };
 
       const [appointment] = await db
@@ -264,11 +327,11 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
 
       const formattedDate = appointment.startDate
         ? new Date(appointment.startDate).toLocaleDateString('th-TH', {
-          weekday: 'long',
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric'
-        })
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric'
+          })
         : 'ไม่ระบุวัน';
 
       const formattedTime = appointment.startAt
@@ -355,18 +418,18 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
 
       const formattedStartDate = appointment.startDate
         ? new Date(appointment.startDate).toLocaleDateString('th-TH', {
-          weekday: 'long',
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric',
-        })
+            weekday: 'long',
+            day: 'numeric',
+            month: 'long',
+            year: 'numeric',
+          })
         : 'วันนัดหมายหลัก';
 
       const formattedTime = appointment.startAt
         ? `${new Date(appointment.startAt).toLocaleTimeString('th-TH', {
-          hour: '2-digit',
-          minute: '2-digit',
-        })} น.`
+            hour: '2-digit',
+            minute: '2-digit',
+          })} น.`
         : 'ไม่ระบุเวลา';
 
       const rawResults = [
@@ -411,7 +474,7 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 7. POST /api/appointments/:id/confirm - ยืนยันสรุปวันนัดหมาย (ผู้จัดกดสรุปโหวต)
+  // 7. POST /api/appointments/:id/confirm
   fastify.post('/:id/confirm', async (request: any, reply) => {
     try {
       await request.jwtVerify();
@@ -445,11 +508,15 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
     }
   });
 
-  // 8. POST /api/appointments - สร้างนัดหมายใหม่
+  // 8. POST /api/appointments
   fastify.post('/', async (request: any, reply) => {
     try {
       await request.jwtVerify();
-      const userId = request.user.userId;
+      const userId = extractUserId(request);
+
+      if (!userId) {
+        return reply.status(401).send({ message: 'Unauthorized: Missing User ID' });
+      }
 
       const body = request.body || {};
       const {
@@ -502,10 +569,7 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // นับเต็มวัน ตั้งแต่วันเริ่มต้นจนถึงวันกลับ
         startAt = combineDateAndTime(formattedStartDate, '00:00');
-
-        // ใช้เที่ยงคืนของวันถัดจากวันกลับเป็นเวลาสิ้นสุดแบบ exclusive
         endAt = combineDateAndTime(
           addDaysToDateKey(formattedEndDate, 1),
           '00:00'
@@ -527,7 +591,6 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
           });
         }
 
-        // รองรับนัดหมายที่สิ้นสุดหลังเที่ยงคืน
         if (endAt.getTime() < startAt.getTime()) {
           endAt = new Date(endAt.getTime() + 24 * 60 * 60 * 1000);
           formattedEndDate = addDaysToDateKey(formattedStartDate, 1);
