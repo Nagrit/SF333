@@ -172,36 +172,24 @@ export default function LoginScreen() {
               }}
             >
               <Image
-                source={{ uri: 'https://cdn-icons-png.flaticon.com/512/2693/2693507.png' }}
+                source={{ uri: 'https://res.cloudinary.com/j7d71pvq/image/upload/f_auto,q_auto/ปฏิทินเพื่อนสุดคิวต์' }}
                 style={{
-                  width: iconSize,
-                  height: iconSize,
+                  width: iconSize * 3, 
+                  height: iconSize * 3,
                   resizeMode: 'contain',
-                  marginBottom: isSmallScreen ? 6 : 8,
+                  marginBottom: isSmallScreen ? 12 : 2,
                 }}
               />
-              <Text
-                style={{
-                  fontWeight: '700',
-                  color: '#1C4E4E',
-                  letterSpacing: 0.5,
-                  marginBottom: 6,
-                  fontSize: Math.max(15 * fontSizeBase, 14),
-                }}
-              >
-                Friends Calendar
-              </Text>
-
               <View style={{ alignItems: 'center', marginTop: 4 }}>
                 <Text
                   style={{
-                    fontWeight: '900',
+                    fontWeight: '700',
                     color: '#000000',
                     letterSpacing: 1.2,
                     fontSize: Math.max(28 * fontSizeBase, 24),
                   }}
                 >
-                  HELLO!
+                  สวัสดี!
                 </Text>
                 <Text
                   style={{
@@ -239,7 +227,7 @@ export default function LoginScreen() {
                     fontSize: Math.max(24 * fontSizeBase, 20),
                   }}
                 >
-                  LOGIN
+                  เข้าสู่ระบบ
                 </Text>
                 <Text
                   style={{
@@ -248,7 +236,7 @@ export default function LoginScreen() {
                     fontSize: Math.max(14 * fontSizeBase, 13),
                   }}
                 >
-                  Enter your Email to continue
+                  กรอกอีเมลและรหัสผ่าน เพื่อเข้าสู่ระบบ
                 </Text>
               </View>
 
@@ -360,11 +348,11 @@ export default function LoginScreen() {
                       color: '#ffffff',
                       fontWeight: '600',
                       flexShrink: 1,
-                      fontSize: Math.max(14 * fontSizeBase, 13),
+                      fontSize: Math.max(12 * fontSizeBase, 13),
                     }}
                     numberOfLines={1}
                   >
-                    Remember me
+                    จำการเข้าสู่ระบบ
                   </Text>
                 </TouchableOpacity>
 
@@ -380,7 +368,7 @@ export default function LoginScreen() {
                       fontSize: Math.max(14 * fontSizeBase, 13),
                     }}
                   >
-                    Forgot Password?
+                    ลืมรหัสผ่าน?
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -411,7 +399,7 @@ export default function LoginScreen() {
                       fontSize: Math.max(16 * fontSizeBase, 15),
                     }}
                   >
-                    LOGIN
+                    เข้าสู่ระบบ
                   </Text>
                 )}
               </TouchableOpacity>
@@ -431,7 +419,7 @@ export default function LoginScreen() {
                     fontSize: Math.max(14 * fontSizeBase, 13),
                   }}
                 >
-                  Don't have an account?{' '}
+                  ยังไม่มีบัญชีผู้ใช้?{' '}
                 </Text>
                 <TouchableOpacity onPress={() => router.push('/(auth)/register')}>
                   <Text
@@ -442,7 +430,7 @@ export default function LoginScreen() {
                       fontSize: Math.max(14 * fontSizeBase, 13),
                     }}
                   >
-                    Sign up
+                    สมัครบัญชีผู้ใช้
                   </Text>
                 </TouchableOpacity>
               </View>

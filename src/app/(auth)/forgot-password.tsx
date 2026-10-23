@@ -79,19 +79,9 @@ export default function ForgotPasswordScreen() {
           {/* Header Illustration */}
           <View style={{ alignItems: 'center', paddingBottom: 24, paddingHorizontal: 20 }}>
             <Image
-              source={{ uri: 'https://cdn-icons-png.flaticon.com/512/2693/2693507.png' }}
-              style={{ width: 90, height: 90, resizeMode: 'contain', marginBottom: 6 }}
+              source={{ uri: 'https://res.cloudinary.com/j7d71pvq/image/upload/f_auto,q_auto/ปฏิทินเพื่อนสุดคิวต์' }}
+              style={{ width: 200, height: 200, resizeMode: 'contain', marginBottom: 6 }}
             />
-            <Text
-              style={{
-                fontSize: 16,
-                fontWeight: '700',
-                color: '#1C4E4E',
-                letterSpacing: 0.5,
-              }}
-            >
-              friends Calendar
-            </Text>
           </View>
 
           {/* Teal Form Container */}
@@ -116,7 +106,7 @@ export default function ForgotPasswordScreen() {
                 letterSpacing: 0.5,
               }}
             >
-              Forgot Password
+              ฉันลืมรหัสผ่าน
             </Text>
             <Text
               style={{
@@ -127,7 +117,7 @@ export default function ForgotPasswordScreen() {
                 marginBottom: 28,
               }}
             >
-              Enter your Email for password restore
+              กรุณาใส่อีเมลที่ใช้งาน เพื่อรับลิงค์รีเซ็ตรหัสผ่าน
             </Text>
 
             {/* Email Input */}
@@ -146,7 +136,7 @@ export default function ForgotPasswordScreen() {
               <TextInput
                 value={email}
                 onChangeText={setEmail}
-                placeholder="Email"
+                placeholder="อีเมล"
                 placeholderTextColor="#8EAEAE"
                 keyboardType="email-address"
                 autoCapitalize="none"
@@ -185,7 +175,7 @@ export default function ForgotPasswordScreen() {
                     letterSpacing: 0.5,
                   }}
                 >
-                  Reset Password
+                  ส่งคำขอ
                 </Text>
               )}
             </TouchableOpacity>
@@ -204,7 +194,7 @@ export default function ForgotPasswordScreen() {
                   textDecorationLine: 'underline',
                 }}
               >
-                Return to Login
+               หน้าเข้าสู่ระบบ
               </Text>
             </TouchableOpacity>
           </View>
