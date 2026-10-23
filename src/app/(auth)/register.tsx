@@ -142,24 +142,14 @@ export default function RegisterScreen() {
               }}
             >
               <Image
-                source={{ uri: 'https://cdn-icons-png.flaticon.com/512/2693/2693507.png' }}
+                source={{ uri: 'https://res.cloudinary.com/j7d71pvq/image/upload/f_auto,q_auto/ปฏิทินเพื่อนสุดคิวต์' }}
                 style={{
-                  width: iconSize,
-                  height: iconSize,
+                  width: iconSize *3,
+                  height: iconSize *3,
                   resizeMode: 'contain',
                   marginBottom: isSmallScreen ? 4 : 6,
                 }}
               />
-              <Text
-                style={{
-                  fontWeight: '700',
-                  color: '#1C4E4E',
-                  letterSpacing: 0.5,
-                  fontSize: Math.max(15 * fontSizeBase, 14),
-                }}
-              >
-                friends Calendar
-              </Text>
             </View>
 
             {/* Form Container */}
@@ -185,7 +175,7 @@ export default function RegisterScreen() {
                     fontSize: Math.max(24 * fontSizeBase, 20),
                   }}
                 >
-                  SIGN UP
+                  สมัครบัญชีผู้ใช้
                 </Text>
                 <Text
                   style={{
@@ -194,7 +184,7 @@ export default function RegisterScreen() {
                     fontSize: Math.max(13 * fontSizeBase, 12),
                   }}
                 >
-                  Enter your details to create an account
+                  กรอกข้อมูลด้านล่างเพื่อสมัครบัญชี
                 </Text>
               </View>
 
@@ -214,7 +204,7 @@ export default function RegisterScreen() {
                 <TextInput
                   value={fullName}
                   onChangeText={setFullName}
-                  placeholder="Full Name (ชื่อ - นามสกุล)"
+                  placeholder="ชื่อ - นามสกุล"
                   placeholderTextColor="#8EAEAE"
                   style={{
                     flex: 1,
@@ -269,7 +259,7 @@ export default function RegisterScreen() {
                 <TextInput
                   value={email}
                   onChangeText={setEmail}
-                  placeholder="Email"
+                  placeholder="อีเมล"
                   placeholderTextColor="#8EAEAE"
                   keyboardType="email-address"
                   autoCapitalize="none"
@@ -298,7 +288,7 @@ export default function RegisterScreen() {
                 <TextInput
                   value={password}
                   onChangeText={setPassword}
-                  placeholder="Password"
+                  placeholder="รหัสผ่าน"
                   placeholderTextColor="#8EAEAE"
                   secureTextEntry
                   style={{
@@ -326,7 +316,7 @@ export default function RegisterScreen() {
                 <TextInput
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
-                  placeholder="Confirm Password"
+                  placeholder="ยืนยันรหัสผ่าน"
                   placeholderTextColor="#8EAEAE"
                   secureTextEntry
                   style={{
@@ -372,13 +362,13 @@ export default function RegisterScreen() {
                     fontSize: Math.max(12 * fontSizeBase, 11),
                   }}
                 >
-                  By continuing, you agree with our{' '}
+                  คุณยอมรับ{' '}
                   <Text style={{ fontWeight: 'bold', textDecorationLine: 'underline' }}>
-                    Terms of service
+                    ข้อกำหนดการใช้งาน
                   </Text>{' '}
-                  and{' '}
+                  และ{' '}
                   <Text style={{ fontWeight: 'bold', textDecorationLine: 'underline' }}>
-                    Privacy Policy
+                    นโยบายความเป็นส่วนตัว
                   </Text>
                   .
                 </Text>
@@ -411,7 +401,7 @@ export default function RegisterScreen() {
                       fontSize: Math.max(15 * fontSizeBase, 14),
                     }}
                   >
-                    SIGN UP
+                    สมัครบัญชี
                   </Text>
                 )}
               </TouchableOpacity>
@@ -431,7 +421,7 @@ export default function RegisterScreen() {
                     fontSize: Math.max(13 * fontSizeBase, 12),
                   }}
                 >
-                  Already have an account?{' '}
+                  มีบัญชีอยู่แล้ว?{' '}
                 </Text>
                 <TouchableOpacity onPress={() => router.push('/(auth)/login')}>
                   <Text
@@ -442,7 +432,7 @@ export default function RegisterScreen() {
                       fontSize: Math.max(13 * fontSizeBase, 12),
                     }}
                   >
-                    Sign in
+                    เข้าสู่ระบบ
                   </Text>
                 </TouchableOpacity>
               </View>
