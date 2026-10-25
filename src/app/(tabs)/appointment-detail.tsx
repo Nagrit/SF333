@@ -1,5 +1,5 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { AlertCircle, ArrowLeft, Calendar, Check, Clock, MapPin, Share2, X } from 'lucide-react-native';
+import { AlertCircle, ArrowLeft, Calendar, Check, Clock, MapPin, Share2, Trash2, X } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
@@ -22,7 +22,7 @@ export interface Member {
   id: string;
   name: string;
   avatar: string;
-  status: 'confirmed' | 'pending' | 'rejected' | 'voted' | 'waiting';
+  status: 'confirmed' | 'accepted' | 'pending' | 'rejected' | 'voted' | 'waiting';
   statusText: string;
 }
 
@@ -39,10 +39,13 @@ export interface AppointmentDetail {
   conflictDetailText?: string;
   userResponse: 'accept' | 'reject' | null;
   members: Member[];
+  canDelete?: boolean;
+  isOrganizer: boolean;
 }
 
 export default function AppointmentDetailScreen() {
   const router = useRouter();
+  const [isDeleting, setIsDeleting] = useState(false);
   const params = useLocalSearchParams<{ id?: string }>();
   const insets = useSafeAreaInsets();
 
@@ -61,26 +64,36 @@ export default function AppointmentDetailScreen() {
     try {
       if (!isPullToRefresh) setIsLoading(true);
       const res = await apiFetch<any>(`/api/appointments/${params.id}`);
-      
+
       // รองรับโครงสร้างข้อมูลทั้งแบบ wrapped ({ appointment: ... }) หรือ direct object
       const raw = res?.appointment || res || {};
 
-      const formattedMembers: Member[] = (raw.members || []).map((m: any, idx: number) => {
-        const rawStatus = m.status || 'pending';
-        let statusText = m.statusText || 'รอยืนยัน';
-        
-        if (rawStatus === 'confirmed' || rawStatus === 'accept') statusText = 'เข้าร่วม';
-        else if (rawStatus === 'rejected' || rawStatus === 'reject') statusText = 'ไม่สะดวก';
-        else if (rawStatus === 'voted') statusText = 'โหวตแล้ว';
+      const formattedMembers: Member[] = (raw.members || []).map(
+        (m: any, idx: number) => {
+          const rawStatus = String(m.status || 'pending').toLowerCase();
 
-        return {
-          id: m.id || String(idx),
-          name: m.name || m.userName || 'สมาชิก',
-          avatar: m.avatar || m.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
-          status: rawStatus,
-          statusText
-        };
-      });
+          let statusText = m.statusText || 'รอยืนยัน';
+
+          if (['confirmed', 'accepted', 'accept'].includes(rawStatus)) {
+            statusText = 'เข้าร่วม';
+          } else if (['rejected', 'reject'].includes(rawStatus)) {
+            statusText = 'ไม่สะดวก';
+          } else if (rawStatus === 'voted') {
+            statusText = 'โหวตแล้ว';
+          }
+
+          return {
+            id: String(m.userId || m.id || idx),
+            name: m.name || m.userName || 'สมาชิก',
+            avatar:
+              m.avatar ||
+              m.avatarUrl ||
+              'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=100',
+            status: rawStatus as Member['status'],
+            statusText,
+          };
+        }
+      );
 
       const formattedDetail: AppointmentDetail = {
         id: raw.id || params.id,
@@ -93,8 +106,19 @@ export default function AppointmentDetailScreen() {
         location: raw.location || 'ไม่ระบุสถานที่',
         hasTimeConflict: raw.hasTimeConflict ?? false,
         conflictDetailText: raw.conflictDetailText || '',
-        userResponse: raw.userResponse || null,
-        members: formattedMembers
+        userResponse:
+          ['accept', 'accepted', 'confirmed'].includes(
+            String(raw.userResponse || '').toLowerCase()
+          )
+            ? 'accept'
+            : ['reject', 'rejected'].includes(
+              String(raw.userResponse || '').toLowerCase()
+            )
+              ? 'reject'
+              : null,
+        members: formattedMembers,
+        canDelete: raw.canDelete === true,
+        isOrganizer: raw.isOrganizer ?? false,
       };
 
       setAppointment(formattedDetail);
@@ -116,27 +140,90 @@ export default function AppointmentDetailScreen() {
     loadAppointmentDetail(true);
   };
 
+
+  const handleDeleteAppointment = () => {
+    if (!appointment || isDeleting) return;
+
+    Alert.alert(
+      'ลบนัดหมาย',
+      `คุณต้องการลบ "${appointment.title}" ใช่หรือไม่?\nการลบนี้ไม่สามารถย้อนกลับได้`,
+      [
+        {
+          text: 'ยกเลิก',
+          style: 'cancel',
+        },
+        {
+          text: 'ลบนัดหมาย',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              setIsDeleting(true);
+
+              await apiFetch(`/api/appointments/${appointment.id}`, {
+                method: 'DELETE',
+              });
+
+              Alert.alert('สำเร็จ', 'ลบนัดหมายเรียบร้อยแล้ว', [
+                {
+                  text: 'ตกลง',
+                  onPress: () => router.back(),
+                },
+              ]);
+            } catch (error: any) {
+              Alert.alert(
+                'เกิดข้อผิดพลาด',
+                error.message || 'ไม่สามารถลบนัดหมายได้',
+              );
+            } finally {
+              setIsDeleting(false);
+            }
+          },
+        },
+      ],
+    );
+  };
+
   // ตอบรับ / ปฏิเสธ นัดหมาย
   const handleUserResponse = async (response: 'accept' | 'reject') => {
-    if (!appointment) return;
+    if (!appointment || isResponding) return;
 
     const previousResponse = appointment.userResponse;
-    setAppointment(prev => prev ? { ...prev, userResponse: response } : null);
+
+    setAppointment(prev =>
+      prev ? { ...prev, userResponse: response } : null
+    );
 
     try {
       setIsResponding(true);
+
       await apiFetch(`/api/appointments/${appointment.id}/respond`, {
         method: 'POST',
-        body: JSON.stringify({ response })
+        body: JSON.stringify({ response }),
       });
-      Alert.alert('สำเร็จ', response === 'accept' ? 'ตอบรับคำเชิญเรียบร้อยแล้ว' : 'ปฏิเสธคำเชิญเรียบร้อยแล้ว');
+
+      // โหลดสถานะล่าสุดจากฐานข้อมูล
+      await loadAppointmentDetail(true);
+
+      Alert.alert(
+        'สำเร็จ',
+        response === 'accept'
+          ? 'ตอบรับคำเชิญเรียบร้อยแล้ว'
+          : 'ปฏิเสธคำเชิญเรียบร้อยแล้ว'
+      );
     } catch (error: any) {
-      setAppointment(prev => prev ? { ...prev, userResponse: previousResponse } : null);
-      Alert.alert('เกิดข้อผิดพลาด', error.message || 'ไม่สามารถส่งคำตอบได้ กรุณาลองใหม่อีกครั้ง');
+      setAppointment(prev =>
+        prev ? { ...prev, userResponse: previousResponse } : null
+      );
+
+      Alert.alert(
+        'เกิดข้อผิดพลาด',
+        error.message || 'ไม่สามารถบันทึกคำตอบได้ กรุณาลองใหม่อีกครั้ง'
+      );
     } finally {
       setIsResponding(false);
     }
   };
+
 
   const handleShare = async () => {
     if (!appointment) return;
@@ -186,9 +273,29 @@ export default function AppointmentDetailScreen() {
           <Text style={styles.headerTitle}>รายละเอียดการนัดหมาย</Text>
         </View>
 
-        <TouchableOpacity onPress={handleShare} style={styles.shareIcon}>
-          <Share2 color="#ffffff" size={20} />
-        </TouchableOpacity>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 16 }}>
+          {appointment.isOrganizer && (
+            <TouchableOpacity
+              onPress={handleDeleteAppointment}
+              disabled={isDeleting}
+              style={styles.shareIcon}
+            >
+              {isDeleting ? (
+                <ActivityIndicator color="#ffffff" size="small" />
+              ) : (
+                <Trash2 color="#f75050" size={20} />
+              )}
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            onPress={handleShare}
+            style={styles.shareIcon}
+            accessibilityLabel="แชร์ Event"
+          >
+            <Share2 color="#ffffff" size={20} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       <ScrollView
@@ -304,7 +411,7 @@ export default function AppointmentDetailScreen() {
 
           <View style={styles.membersCardBox}>
             {(appointment?.members || []).map((m: Member, idx: number) => {
-              const isConfirmed = m.status === 'confirmed' || m.status === 'voted';
+              const isConfirmed = ['confirmed', 'accepted', 'voted'].includes(m.status);
               const isRejected = m.status === 'rejected';
 
               return (

@@ -1,8 +1,20 @@
+
+import Constants from 'expo-constants';
+import * as Notifications from 'expo-notifications';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import { useEffect, useState } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { ActivityIndicator, Platform, View } from 'react-native';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { getToken } from '../services/api'; // 1. ดึง getToken จาก api.ts มาใช้
+import { apiFetch, getToken } from '../services/api';
+
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 export default function RootLayout() {
   const [isLoading, setIsLoading] = useState(true);
@@ -10,45 +22,131 @@ export default function RootLayout() {
   const router = useRouter();
   const segments = useSegments();
 
-  // 1. ดึง Token จาก SecureStore (ผ่าน getToken)
+  // 1. ตรวจสอบ Login
   useEffect(() => {
+    let cancelled = false;
+
     const checkAuth = async () => {
       try {
         const token = await getToken();
-        if (token && token !== 'null' && token !== 'undefined' && token.trim() !== '') {
+
+        if (cancelled) return;
+
+        if (
+          token &&
+          token !== 'null' &&
+          token !== 'undefined' &&
+          token.trim() !== ''
+        ) {
           setUserToken(token);
         } else {
           setUserToken(null);
         }
-      } catch (error) {
-        setUserToken(null);
+      } catch {
+        if (!cancelled) setUserToken(null);
       } finally {
-        setIsLoading(false);
+        if (!cancelled) setIsLoading(false);
       }
     };
 
     checkAuth();
-  }, [segments]); // 2. ให้เช็กสิทธิ์ใหม่เมื่อมีการสลับกลุ่มหน้า
 
-  // 2. ดักการนำทาง (Route Guard)
+    return () => {
+      cancelled = true;
+    };
+  }, [segments]);
+
+  // 2. Route Guard
   useEffect(() => {
     if (isLoading) return;
 
     const inAuthGroup = segments[0] === '(auth)';
 
     if (!userToken && !inAuthGroup) {
-      // ถ้าไม่มี Token และไม่ได้อยู่ในกลุ่มหน้า (auth) -> ย้ายไป Login
       router.replace('/(auth)/login');
     } else if (userToken && inAuthGroup) {
-      // ถ้ามี Token แล้วแต่ดันค้างหน้า (auth) -> ย้ายไป Main Tabs
       router.replace('/(tabs)');
     }
-  }, [userToken, isLoading, segments]);
+  }, [userToken, isLoading, segments, router]);
 
-  // 3. แสดงหน้า Loading ระหว่างรอเช็ก Token
+  // 3. ลงทะเบียน Push Token หลัง Login
+  // ต้องอยู่ก่อน if (isLoading) return เพื่อรักษาลำดับ Hooks
+  useEffect(() => {
+    if (!userToken || Platform.OS === 'web') return;
+
+    let cancelled = false;
+
+    const registerPushToken = async () => {
+      try {
+        if (Platform.OS === 'android') {
+          await Notifications.setNotificationChannelAsync('default', {
+            name: 'การแจ้งเตือนนัดหมาย',
+            importance: Notifications.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            sound: 'default',
+          });
+        }
+
+        let permission = await Notifications.getPermissionsAsync();
+
+        if (permission.status !== 'granted') {
+          permission = await Notifications.requestPermissionsAsync();
+        }
+
+        if (permission.status !== 'granted' || cancelled) {
+          console.log('[Push] Notification permission not granted');
+          return;
+        }
+
+        const projectId =
+          Constants.easConfig?.projectId ??
+          Constants.expoConfig?.extra?.eas?.projectId;
+
+        if (!projectId) {
+          console.warn('[Push] Missing EAS projectId');
+          return;
+        }
+
+        const result = await Notifications.getExpoPushTokenAsync({
+          projectId,
+        });
+
+        if (cancelled) return;
+
+        await apiFetch('/api/notifications/push-token', {
+          method: 'POST',
+          body: JSON.stringify({
+            token: result.data,
+            platform: Platform.OS,
+          }),
+        });
+
+        if (!cancelled) {
+          console.log('[Push] Push token registered');
+        }
+      } catch (error) {
+        console.warn('[Push] Registration failed:', error);
+      }
+    };
+
+    registerPushToken();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [userToken]);
+
+  // 4. Loading UI — ต้องอยู่หลัง Hooks ทั้งหมด
   if (isLoading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#cce1de' }}>
+      <View
+        style={{
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+          backgroundColor: '#cce1de',
+        }}
+      >
         <ActivityIndicator size="large" color="#468f92" />
       </View>
     );

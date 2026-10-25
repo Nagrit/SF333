@@ -1,9 +1,141 @@
 import { and, desc, eq } from 'drizzle-orm';
 import { FastifyInstance } from 'fastify';
 import { db } from '../db';
-import { notifications } from '../db/schema';
+import { notifications, userPushTokens } from '../db/schema';
 
 export async function notificationRoutes(fastify: FastifyInstance) {
+
+  fastify.post('/push-token', async (request: any, reply) => {
+    try {
+      await request.jwtVerify();
+
+      const userId = request.user.userId;
+      const body = request.body as {
+        token?: string;
+        platform?: string;
+      };
+
+      const token = body?.token?.trim();
+      const platform = body?.platform;
+
+      if (
+        !token ||
+        !/^Expo(nent)?PushToken\[[^\]]+\]$/.test(token)
+      ) {
+        return reply.status(400).send({
+          message: 'Push Token ไม่ถูกต้อง',
+        });
+      }
+
+      const [savedToken] = await db
+        .insert(userPushTokens)
+        .values({
+          userId,
+          token,
+          platform:
+            platform === 'ios' || platform === 'android'
+              ? platform
+              : null,
+          enabled: true,
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userPushTokens.token,
+          set: {
+            userId,
+            platform:
+              platform === 'ios' || platform === 'android'
+                ? platform
+                : null,
+            enabled: true,
+            updatedAt: new Date(),
+          },
+        })
+        .returning({
+          id: userPushTokens.id,
+          platform: userPushTokens.platform,
+          enabled: userPushTokens.enabled,
+        });
+
+      return reply.status(200).send({
+        message: 'ลงทะเบียน Push Token สำเร็จ',
+        data: savedToken,
+      });
+    } catch (err) {
+      request.log.error(err);
+      return reply.status(500).send({
+        message: 'ไม่สามารถลงทะเบียน Push Token ได้',
+      });
+    }
+  });
+
+
+  // ทดสอบส่ง Push ไปยังอุปกรณ์ของผู้ใช้ที่ล็อกอินอยู่เท่านั้น
+  fastify.post('/test-push', async (request: any, reply) => {
+    try {
+      await request.jwtVerify();
+
+      const userId = request.user.userId;
+
+      const [savedToken] = await db
+        .select({
+          token: userPushTokens.token,
+        })
+        .from(userPushTokens)
+        .where(
+          and(
+            eq(userPushTokens.userId, userId),
+            eq(userPushTokens.enabled, true),
+          ),
+        )
+        .limit(1);
+
+      if (!savedToken) {
+        return reply.status(404).send({
+          message: 'ไม่พบ Push Token ที่เปิดใช้งานสำหรับบัญชีนี้',
+        });
+      }
+
+      const { Expo } = await import('expo-server-sdk');
+      const expo = new Expo();
+
+      if (!Expo.isExpoPushToken(savedToken.token)) {
+        return reply.status(400).send({
+          message: 'Push Token ในฐานข้อมูลไม่ถูกต้อง',
+        });
+      }
+
+      const tickets = await expo.sendPushNotificationsAsync([
+        {
+          to: savedToken.token,
+          sound: 'default',
+          title: 'SF333 ทดสอบการแจ้งเตือน',
+          body: 'Push Notification ทำงานแล้ว!',
+          data: { type: 'test' },
+          channelId: 'default',
+        },
+      ]);
+
+      request.log.info({ tickets }, '[Push Test] Expo response');
+
+      return reply.send({
+        message: 'ส่งคำขอ Push ไปยัง Expo แล้ว',
+        result: tickets.map((ticket) =>
+          ticket.status === 'ok'
+            ? { status: ticket.status, id: ticket.id }
+            : { status: ticket.status, message: ticket.message },
+        ),
+      });
+    } catch (err) {
+      request.log.error(err);
+      return reply.status(500).send({
+        message: 'ส่ง Push Notification ทดสอบไม่สำเร็จ',
+      });
+    }
+  });
+
+
+
   // 1. GET /api/notifications - ดึงรายการแจ้งเตือนทั้งหมดของผู้ใช้
   fastify.get('/', async (request: any, reply) => {
     try {

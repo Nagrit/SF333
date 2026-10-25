@@ -8,6 +8,7 @@ import {
   primaryKey,
   text,
   timestamp,
+  unique,
   uuid,
   varchar,
 } from 'drizzle-orm/pg-core';
@@ -143,3 +144,168 @@ export const notifications = pgTable('notifications', {
   data: text('data'),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),
 });
+
+
+// สมาชิกที่ได้รับเชิญเข้าร่วมนัดหมาย
+export const appointmentMembers = pgTable(
+  'appointment_members',
+  {
+    appointmentId: uuid('appointment_id')
+      .notNull()
+      .references(() => appointments.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    status: varchar('status', { length: 20 })
+      .default('pending')
+      .notNull(),
+    invitedAt: timestamp('invited_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.appointmentId, table.userId] }),
+    check(
+      'appointment_members_status_check',
+      sql`${table.status} IN ('pending', 'accepted', 'declined')`
+    ),
+  ]
+);
+
+// หนึ่งนัดหมายมีหัวข้อโหวตได้หลายหัวข้อ
+export const appointmentPolls = pgTable(
+  'appointment_polls',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    appointmentId: uuid('appointment_id')
+      .notNull()
+      .references(() => appointments.id, { onDelete: 'cascade' }),
+    title: varchar('title', { length: 200 }).notNull(),
+    kind: varchar('kind', { length: 30 }).default('general').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    check(
+      'appointment_polls_kind_check',
+      sql`${table.kind} IN ('general', 'date', 'time', 'place', 'activity')`
+    ),
+  ]
+);
+
+// ตัวเลือกในแต่ละหัวข้อโหวต
+export const appointmentPollOptions = pgTable(
+  'appointment_poll_options',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    pollId: uuid('poll_id')
+      .notNull()
+      .references(() => appointmentPolls.id, { onDelete: 'cascade' }),
+    label: text('label').notNull(),
+    startAt: timestamp('start_at', { withTimezone: true }),
+    endAt: timestamp('end_at', { withTimezone: true }),
+    location: text('location'),
+    placeId: text('place_id'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  }
+);
+
+// ผู้ใช้หนึ่งคนเลือกได้หลายตัวเลือกในหัวข้อเดียวกัน
+export const appointmentPollVotes = pgTable(
+  'appointment_poll_votes',
+  {
+    optionId: uuid('option_id')
+      .notNull()
+      .references(() => appointmentPollOptions.id, { onDelete: 'cascade' }),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    primaryKey({ columns: [table.optionId, table.userId] }),
+  ]
+);
+
+// Push tokens สำหรับแต่ละอุปกรณ์ของผู้ใช้
+export const userPushTokens = pgTable(
+  'user_push_tokens',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    platform: varchar('platform', { length: 20 }),
+    enabled: boolean('enabled').default(true).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('user_push_tokens_token_unique').on(table.token),
+  ]
+);
+
+// ประวัติการเตือน เพื่อป้องกันการส่งซ้ำ
+export const appointmentReminderDeliveries = pgTable(
+  'appointment_reminder_deliveries',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+
+    appointmentId: uuid('appointment_id')
+      .notNull()
+      .references(() => appointments.id, { onDelete: 'cascade' }),
+
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+
+    reminderType: varchar('reminder_type', { length: 20 }).notNull(),
+
+    // เวลาที่ควรส่งการเตือนสำหรับเวลาเริ่มนัดหมายรอบนั้น
+    scheduledFor: timestamp('scheduled_for', {
+      withTimezone: true,
+    }).notNull(),
+
+    // ติดตามแต่ละช่องทางแยกกัน
+    inAppSentAt: timestamp('in_app_sent_at', {
+      withTimezone: true,
+    }),
+
+    pushSentAt: timestamp('push_sent_at', {
+      withTimezone: true,
+    }),
+
+    attempts: numeric('attempts', {
+      precision: 6,
+      scale: 0,
+    }).default('0').notNull(),
+
+    lastError: text('last_error'),
+
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (table) => [
+    unique('appointment_reminder_delivery_unique').on(
+      table.appointmentId,
+      table.userId,
+      table.reminderType,
+      table.scheduledFor
+    ),
+    check(
+      'appointment_reminder_type_check',
+      sql`${table.reminderType} IN ('1day', '2hours')`
+    ),
+  ]
+);
