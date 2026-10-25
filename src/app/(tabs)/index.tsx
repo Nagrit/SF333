@@ -1,4 +1,4 @@
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import { Bell, Calendar as CalendarIcon, ChevronLeft, ChevronRight, Clock, MapPin, X } from 'lucide-react-native';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
@@ -67,6 +67,7 @@ export default function IndexScreen() {
   const insets = useSafeAreaInsets();
   const scrollViewRef = useRef<ScrollView>(null);
 
+
   const today = new Date();
   const initialTodayStr = formatDateKey(today.getFullYear(), today.getMonth() + 1, today.getDate());
 
@@ -81,6 +82,7 @@ export default function IndexScreen() {
   const [selectedDate, setSelectedDate] = useState(initialTodayStr);
 
   const [appointments, setAppointments] = useState<AppointmentItem[]>([]);
+  const [unreadCount, setUnreadCount] = useState(0);
   const [pendingAppointments, setPendingAppointments] = useState<PendingAppointmentItem[]>([]);
   const [dateStatuses, setDateStatuses] = useState<Record<string, AppointmentStatus>>({});
 
@@ -89,6 +91,20 @@ export default function IndexScreen() {
   const [isSavingStatus, setIsSavingStatus] = useState(false);
   const [isStatusModalOpen, setIsStatusModalOpen] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState<AppointmentStatus | null>(null);
+
+  const fetchUnreadCount = useCallback(async () => {
+    try {
+      const res = await apiFetch<{ unreadCount?: number }>(
+        '/api/notifications'
+      );
+
+      setUnreadCount(
+        typeof res?.unreadCount === 'number' ? res.unreadCount : 0
+      );
+    } catch (error) {
+      console.error('[Notifications] Failed to fetch unread count:', error);
+    }
+  }, []);
 
   // ดึงข้อมูลทั้งหมดจาก API
   const fetchAllData = useCallback(async () => {
@@ -99,8 +115,9 @@ export default function IndexScreen() {
         apiFetch<UserProfile>('/api/auth/me'),
         apiFetch<AppointmentItem[]>('/api/appointments'),
         apiFetch<PendingAppointmentItem[]>('/api/appointments/pending'),
-        apiFetch<Record<string, AppointmentStatus>>('/api/user-status')
+        apiFetch<Record<string, AppointmentStatus>>('/api/user-status'),
       ]);
+
 
       console.log('✅ [fetchAllData] User data received:', userRes?.name || 'No user name');
 
@@ -113,15 +130,19 @@ export default function IndexScreen() {
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
+
     }
   }, []);
 
-
-  // app/(tabs)/index.tsx
   useEffect(() => {
-    console.log('🏠 [tabs/index.tsx] Mounted! Fetching data...');
     fetchAllData();
-  }, []);
+  }, [fetchAllData]);
+
+  useFocusEffect(
+    useCallback(() => {
+      fetchUnreadCount();
+    }, [fetchUnreadCount])
+  );
 
   const onRefresh = () => {
     setIsRefreshing(true);
@@ -350,8 +371,20 @@ export default function IndexScreen() {
                 <Text style={styles.userNameText}>{userProfile.name}</Text>
               </View>
             </View>
-            <TouchableOpacity onPress={() => router.push('/notifications')} style={styles.bellButton} activeOpacity={0.8}>
+            <TouchableOpacity
+              onPress={() => router.push('/notifications')}
+              style={styles.bellButton}
+              activeOpacity={0.8}
+            >
               <Bell color="#e08955" size={20} />
+
+              {unreadCount > 0 && (
+                <View style={styles.notificationBadge}>
+                  <Text style={styles.notificationBadgeText}>
+                    {unreadCount > 99 ? '99+' : unreadCount}
+                  </Text>
+                </View>
+              )}
             </TouchableOpacity>
           </View>
         </View>
@@ -656,6 +689,26 @@ export default function IndexScreen() {
 }
 
 const styles = StyleSheet.create({
+  notificationBadge: {
+    position: 'absolute',
+    top: -5,
+    right: -5,
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 9,
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: '#ffffff',
+  },
+  notificationBadgeText: {
+    color: '#ffffff',
+    fontSize: 10,
+    fontWeight: 'bold',
+  },
+
   container: {
     flex: 1,
     backgroundColor: '#cce1de',

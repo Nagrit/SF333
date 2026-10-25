@@ -63,8 +63,12 @@ export async function removeToken(): Promise<void> {
 export async function apiFetch<T>(
   endpoint: string,
   options: RequestInit = {},
+  authTokenOverride?: string | null,
 ): Promise<T> {
-  const token = await getToken();
+  const token =
+    authTokenOverride !== undefined
+      ? authTokenOverride
+      : await getToken();
   console.log('[apiFetch] Token exists:', Boolean(token));
   console.log('[apiFetch] Token length:', token?.length ?? 0);
 

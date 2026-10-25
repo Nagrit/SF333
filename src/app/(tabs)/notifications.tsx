@@ -81,6 +81,33 @@ export default function NotificationsScreen() {
     fetchNotifications();
   }, [fetchNotifications]);
 
+  const handleOpenNotification = async (item: NotificationItem) => {
+  setSelectedNotif(item);
+
+  if (!item.isUnread) return;
+
+  // อัปเดตหน้าจอทันที
+  setNotifications((prev) =>
+    prev.map((n) =>
+      n.id === item.id ? { ...n, isUnread: false } : n
+    )
+  );
+  setSelectedNotif({ ...item, isUnread: false });
+
+  try {
+    await apiFetch(`/api/notifications/${item.id}/read`, {
+      method: 'PUT',
+    });
+  } catch (error: any) {
+    // หากบันทึกไม่สำเร็จ ให้โหลดสถานะจริงจาก Backend อีกครั้ง
+    Alert.alert(
+      'บันทึกสถานะไม่สำเร็จ',
+      'ไม่สามารถบันทึกสถานะการอ่านได้ กรุณาลองใหม่'
+    );
+    await fetchNotifications();
+  }
+};
+
   const handleDeleteAll = async () => {
     try {
       // ลบทีละรายการ หรือเรียก Clear Endpoint
@@ -134,7 +161,7 @@ export default function NotificationsScreen() {
           <ArrowLeft color="#ffffff" size={22} />
         </TouchableOpacity>
         <Text style={{ color: '#ffffff', fontWeight: 'bold', fontSize: 18 }}>
-          {selectedNotif ? 'Notification' : 'Notifications'}
+          {selectedNotif ? 'การแจ้งเตือน' : 'การแจ้งเตือน'}
         </Text>
       </View>
 
@@ -220,7 +247,7 @@ export default function NotificationsScreen() {
                   textAlign: 'center',
                 }}
               >
-                No notification yet
+                ยังไม่มีการแจ้งเตือน
               </Text>
               <Text
                 style={{
@@ -231,7 +258,7 @@ export default function NotificationsScreen() {
                   marginBottom: 24,
                 }}
               >
-                Your notification will appear here once you've received them
+                คุณสามารถกลับมาดูการแจ้งเตือนได้ใหม่ภายหลัง 
               </Text>
             </View>
           ) : (
@@ -262,7 +289,7 @@ export default function NotificationsScreen() {
                 {(notifications || []).map((item) => (
                   <TouchableOpacity
                     key={item.id}
-                    onPress={() => setSelectedNotif(item)}
+                    onPress={() => handleOpenNotification(item)}
                     style={{
                       backgroundColor: '#eef5f4',
                       borderRadius: 16,
