@@ -65,6 +65,8 @@ export async function apiFetch<T>(
   options: RequestInit = {},
 ): Promise<T> {
   const token = await getToken();
+  console.log('[apiFetch] Token exists:', Boolean(token));
+  console.log('[apiFetch] Token length:', token?.length ?? 0);
 
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 90000);
@@ -99,7 +101,10 @@ export async function apiFetch<T>(
 
     if (response.status === 401) {
       console.log(`❌ [apiFetch] 401 Unauthorized from: ${endpoint}`);
-      await removeToken();
+      console.log(
+        '🔎 [apiFetch] Authorization header exists:',
+        headers.has('Authorization'),
+      );
     }
 
     if (!response.ok) {

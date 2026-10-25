@@ -1,5 +1,4 @@
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import * as SecureStore from 'expo-secure-store';
 import { ArrowLeft } from 'lucide-react-native';
 import { useCallback, useEffect, useState } from 'react';
 import {
@@ -16,11 +15,16 @@ import {
   View
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { apiFetch } from '../../services/api';
 
 const API_BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://192.168.1.68:4000';
 
 export interface VoteResultItem {
   id?: string;
+  pollTitle?: string;
+  pollKind?: string;
+  startDate?: string | null;
+  startTime?: string | null;
   rank: string;
   rankBg: string;
   rankColor: string;
@@ -46,41 +50,40 @@ export default function VoteResultScreen() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [isConfirming, setIsConfirming] = useState<boolean>(false);
 
-  const fetchVoteResults = useCallback(async (isPullToRefresh = false) => {
-    if (!appointmentId) {
-      setIsLoading(false);
-      return;
-    }
-
-    try {
-      if (!isPullToRefresh) setIsLoading(true);
-      const token = await SecureStore.getItemAsync('userToken');
-
-      if (!token) {
-        Alert.alert('เซสชันหมดอายุ', 'กรุณาเข้าสู่ระบบใหม่อีกครั้ง');
+  const fetchVoteResults = useCallback(
+    async (isPullToRefresh = false) => {
+      if (!appointmentId) {
+        setIsLoading(false);
         return;
       }
 
-      const response = await fetch(`${API_BASE_URL}/api/appointments/${appointmentId}/vote-result`, {
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        }
-      });
+      try {
+        if (!isPullToRefresh) setIsLoading(true);
 
-      if (response.ok) {
-        const data = await response.json();
-        setResults(data.results || []);
+        const data = await apiFetch<{
+          title?: string;
+          group?: string;
+          results?: VoteResultItem[];
+        }>(`/api/appointments/${appointmentId}/vote-result`);
+
+        setResults(data.results ?? []);
+
         if (data.title) setTitle(data.title);
         if (data.group) setGroupName(data.group);
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'ไม่สามารถโหลดผลโหวตได้';
+
+        Alert.alert('เกิดข้อผิดพลาด', message);
+      } finally {
+        setIsLoading(false);
+        setRefreshing(false);
       }
-    } catch (error) {
-      console.error('Error fetching vote results:', error);
-    } finally {
-      setIsLoading(false);
-      setRefreshing(false);
-    }
-  }, [appointmentId]);
+    },
+    [appointmentId],
+  );
 
   useEffect(() => {
     fetchVoteResults();
@@ -89,32 +92,36 @@ export default function VoteResultScreen() {
   const handleConfirmWinner = async (winnerItem: VoteResultItem) => {
     try {
       setIsConfirming(true);
-      const token = await SecureStore.getItemAsync('userToken');
 
-      const response = await fetch(`${API_BASE_URL}/api/appointments/${appointmentId}/confirm`, {
+      await apiFetch(`/api/appointments/${appointmentId}/confirm`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`
-        },
         body: JSON.stringify({
-          startDate: winnerItem.title,
-          startTime: winnerItem.time
-        })
+          startDate: winnerItem.startDate,
+          startTime: winnerItem.startTime,
+        }),
       });
 
-      if (response.ok) {
-        Alert.alert('สำเร็จ', 'สรุปวันนัดหมายและปิดการโหวตเรียบร้อยแล้ว', [
+      Alert.alert(
+        'สำเร็จ',
+        'สรุปวันนัดหมายและปิดการโหวตเรียบร้อยแล้ว',
+        [
           {
             text: 'ตกลง',
-            onPress: () => router.replace({ pathname: '/appointment-detail', params: { id: appointmentId } })
-          }
-        ]);
-      } else {
-        Alert.alert('เกิดข้อผิดพลาด', 'ไม่สามารถสรุปวันนัดหมายได้');
-      }
+            onPress: () =>
+              router.replace({
+                pathname: '/appointment-detail',
+                params: { id: appointmentId },
+              }),
+          },
+        ],
+      );
     } catch (error) {
-      Alert.alert('เกิดข้อผิดพลาด', 'การเชื่อมต่อขัดข้อง');
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'ไม่สามารถสรุปวันนัดหมายได้';
+
+      Alert.alert('เกิดข้อผิดพลาด', message);
     } finally {
       setIsConfirming(false);
     }
@@ -195,18 +202,16 @@ export default function VoteResultScreen() {
                   ))}
                 </View>
 
-                {item.isWinner && (
+                {item.isWinner && item.startDate && item.startTime && (
                   <TouchableOpacity
                     onPress={() => handleConfirmWinner(item)}
                     disabled={isConfirming}
                     style={styles.confirmWinnerButton}
                     activeOpacity={0.85}
                   >
-                    {isConfirming ? (
-                      <ActivityIndicator color="#ffffff" size="small" />
-                    ) : (
-                      <Text style={styles.confirmWinnerButtonText}>สรุปวันนัดหมายด้วยเวลานี้ 🏆</Text>
-                    )}
+                    <Text style={styles.confirmWinnerButtonText}>
+                      สรุปวันนัดหมายด้วยเวลานี้ 🏆
+                    </Text>
                   </TouchableOpacity>
                 )}
               </View>
