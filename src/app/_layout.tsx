@@ -113,13 +113,30 @@ export default function RootLayout() {
 
         if (cancelled) return;
 
-        await apiFetch('/api/notifications/push-token', {
-          method: 'POST',
-          body: JSON.stringify({
-            token: result.data,
-            platform: Platform.OS,
-          }),
-        });
+        // ตรวจสอบว่า JWT ในเครื่องยังเป็นบัญชีที่กำลังลงทะเบียน
+        const currentToken = await getToken();
+
+        if (cancelled || currentToken !== userToken) {
+          console.log('[Push] Skipped registration: account changed');
+          return;
+        }
+
+        // บังคับให้คำขอนี้ใช้ JWT ของบัญชีที่ Effect นี้รับผิดชอบ
+        await apiFetch(
+          '/api/notifications/push-token',
+          {
+            method: 'POST',
+            body: JSON.stringify({
+              token: result.data,
+              platform: Platform.OS,
+            }),
+          },
+          userToken,
+        );
+
+        if (!cancelled) {
+          console.log('[Push] Push token registered');
+        }
 
         if (!cancelled) {
           console.log('[Push] Push token registered');

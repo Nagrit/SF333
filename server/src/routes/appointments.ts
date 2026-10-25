@@ -13,7 +13,146 @@ import {
   friendGroups,
   groups,
   users,
+  notifications,
+  userPushTokens,
 } from '../db/schema';
+import { Expo } from 'expo-server-sdk';
+
+
+
+
+async function notifyAppointmentMembers(
+  fastify: FastifyInstance,
+  appointmentId: string,
+  actorId: string,
+  title: string,
+  message: string,
+  type: string,
+) {
+  const expo = new Expo();
+
+  const members = await db
+    .select({ userId: appointmentMembers.userId })
+    .from(appointmentMembers)
+    .where(eq(appointmentMembers.appointmentId, appointmentId));
+
+  const recipientIds = [
+    ...new Set(
+      members
+        .map((member) => member.userId)
+        .filter((memberId) => memberId !== actorId),
+    ),
+  ];
+
+  fastify.log.info(
+    {
+      appointmentId,
+      type,
+      recipientCount: recipientIds.length,
+    },
+    '[Appointment Push] Recipients identified',
+  );
+
+  for (const recipientId of recipientIds) {
+    try {
+      await db.insert(notifications).values({
+        userId: recipientId,
+        title,
+        message,
+        type,
+        data: JSON.stringify({ appointmentId }),
+        isRead: false,
+      });
+
+      const tokens = await db
+        .select({ token: userPushTokens.token })
+        .from(userPushTokens)
+        .where(
+          and(
+            eq(userPushTokens.userId, recipientId),
+            eq(userPushTokens.enabled, true),
+          ),
+        );
+
+      const validTokens = [
+        ...new Set(
+          tokens
+            .map((item) => item.token)
+            .filter((token) => Expo.isExpoPushToken(token)),
+        ),
+      ];
+
+      fastify.log.info(
+        {
+          appointmentId,
+          recipientId,
+          tokenCount: tokens.length,
+          validTokenCount: validTokens.length,
+        },
+        '[Appointment Push] Tokens checked',
+      );
+
+      if (validTokens.length === 0) {
+        fastify.log.warn(
+          { appointmentId, recipientId },
+          '[Appointment Push] No valid enabled token',
+        );
+        continue;
+      }
+
+      for (const token of validTokens) {
+        try {
+          const tickets = await expo.sendPushNotificationsAsync([
+            {
+              to: token,
+              sound: 'default',
+              title,
+              body: message,
+              data: { type, appointmentId },
+              channelId: 'default',
+            },
+          ]);
+
+          for (const ticket of tickets) {
+            if (ticket.status === 'ok') {
+              fastify.log.info(
+                {
+                  appointmentId,
+                  recipientId,
+                  ticketId: ticket.id,
+                  status: ticket.status,
+                },
+                '[Appointment Push] Expo accepted message',
+              );
+            } else {
+              fastify.log.error(
+                {
+                  appointmentId,
+                  recipientId,
+                  status: ticket.status,
+                  message: ticket.message,
+                  details: ticket.details,
+                },
+                '[Appointment Push] Expo returned an error ticket',
+              );
+            }
+          }
+        } catch (error) {
+          fastify.log.error(
+            { error, appointmentId, recipientId },
+            '[Appointment Push] Sending failed',
+          );
+        }
+      }
+    } catch (error) {
+      fastify.log.error(
+        { error, appointmentId, recipientId },
+        '[Appointment Push] Notification processing failed',
+      );
+    }
+  }
+}
+
 
 
 function parseToDate(val: any): Date | null {
@@ -283,34 +422,71 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
     }
   });
 
+
   // 2. GET /api/appointments
   fastify.get('/', async (request: any, reply) => {
     try {
       await request.jwtVerify();
+
       const userId = extractUserId(request);
 
-      // ✅ จุดที่แก้ 3: สกัดไว้ก่อน ป้องกันไม่ให้สั่ง Query แบบไม่ใส่เงื่อนไข
       if (!userId) {
-        return reply.status(401).send({ message: 'Unauthorized: Missing User ID' });
+        return reply.status(401).send({
+          message: 'Unauthorized: Missing User ID',
+        });
       }
 
       const groupIds = await getUserGroupIds(userId);
 
-      // ✅ จุดที่แก้ 4: ใส่เงื่อนไขกรองเฉพาะ creatorId หรือ groupId ของผู้ใช้
+      // ดึงนัดหมายที่ผู้ใช้สร้างเอง
       const conditions = [eq(appointments.creatorId, userId)];
+
+      // ดึงนัดหมายที่มาจากกลุ่มของผู้ใช้
       if (groupIds.length > 0) {
         conditions.push(inArray(appointments.groupId, groupIds));
       }
 
-      const myAppointments = await db
+      const ownedOrGroupAppointments = await db
         .select()
         .from(appointments)
         .where(or(...conditions));
 
+      // ดึง ID ของนัดหมายที่ผู้ใช้เป็นสมาชิกหรือได้รับเชิญ
+      const memberRows = await db
+        .select({
+          appointmentId: appointmentMembers.appointmentId,
+        })
+        .from(appointmentMembers)
+        .where(eq(appointmentMembers.userId, userId));
+
+      const memberAppointmentIds = [
+        ...new Set(memberRows.map((row) => row.appointmentId)),
+      ];
+
+      // ดึงรายละเอียดนัดหมายที่ได้รับเชิญ
+      const invitedAppointments =
+        memberAppointmentIds.length > 0
+          ? await db
+            .select()
+            .from(appointments)
+            .where(inArray(appointments.id, memberAppointmentIds))
+          : [];
+
+      // รวมรายการทั้งหมดและป้องกันนัดหมายซ้ำ
+      const appointmentMap = new Map();
+
+      for (const item of [
+        ...ownedOrGroupAppointments,
+        ...invitedAppointments,
+      ]) {
+        appointmentMap.set(item.id, item);
+      }
+
+      const myAppointments = Array.from(appointmentMap.values());
+
       const formatted = myAppointments.map((item) => {
         const isConfirmed = item.status === 'confirmed';
 
-        // ✅ จุดที่แก้ 5: เติม status, category, categoryKey กลับไปให้ Frontend ใช้
         return {
           id: item.id,
           status: item.status,
@@ -340,9 +516,13 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
         };
       });
 
-      return formatted;
+      return reply.send(formatted);
     } catch (err) {
-      return reply.status(401).send({ message: 'Unauthorized' });
+      request.log.error(err, 'Failed to fetch appointments');
+
+      return reply.status(500).send({
+        message: 'ไม่สามารถโหลดรายการนัดหมายได้',
+      });
     }
   });
 
@@ -1045,38 +1225,50 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
 
 
 
+
   fastify.post('/:id/confirm', async (request: any, reply) => {
     try {
       await request.jwtVerify();
 
       const userId = extractUserId(request);
+
       if (!userId) {
-        return reply.status(401).send({ message: 'Unauthorized' });
+        return reply.status(401).send({
+          message: 'Unauthorized',
+        });
       }
 
       const { id } = request.params as { id: string };
       const { startDate, startTime } = (request.body as any) || {};
 
+      // ตรวจสอบว่านัดหมายมีอยู่และผู้ใช้มีสิทธิ์ยืนยัน
       const appointment = await getAppointmentForOwner(id, userId);
 
       if (!appointment) {
-        return reply.status(404).send({ message: 'ไม่พบนัดหมายนี้' });
+        return reply.status(404).send({
+          message: 'ไม่พบนัดหมายนี้',
+        });
       }
 
+      // ตรวจสอบวันที่
       const dateKey = formatToIsoDateStr(startDate);
+
       if (!dateKey) {
         return reply.status(400).send({
           message: 'กรุณาระบุวันที่นัดหมายให้ถูกต้อง',
         });
       }
 
+      // ตรวจสอบเวลา
       const startAt = combineDateAndTime(dateKey, startTime);
+
       if (!startAt) {
         return reply.status(400).send({
           message: 'กรุณาระบุเวลาเริ่มต้นให้ถูกต้องในรูปแบบ HH:mm',
         });
       }
 
+      // บันทึกการยืนยันนัดหมาย
       const [updatedAppointment] = await db
         .update(appointments)
         .set({
@@ -1090,17 +1282,44 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
         .where(eq(appointments.id, id))
         .returning();
 
+      if (!updatedAppointment) {
+        return reply.status(500).send({
+          message: 'ไม่สามารถบันทึกการยืนยันนัดหมายได้',
+        });
+      }
+
+      // แจ้งเตือนสมาชิกทันทีหลังยืนยันสำเร็จ
+      if (updatedAppointment.notifyEnabled) {
+        try {
+          await notifyAppointmentMembers(
+            fastify,
+            updatedAppointment.id,
+            userId,
+            'ยืนยันวันนัดหมายแล้ว',
+            `นัดหมาย "${updatedAppointment.title}" ได้รับการยืนยันวันและเวลาแล้ว`,
+            'appointment_confirmed',
+          );
+        } catch (notificationError) {
+          request.log.error(
+            notificationError,
+            'Failed to notify confirmed appointment members',
+          );
+        }
+      }
+
       return reply.send({
         message: 'สรุปวันนัดหมายเรียบร้อยแล้ว',
         appointment: updatedAppointment,
       });
     } catch (err) {
       request.log.error(err);
+
       return reply.status(500).send({
         message: 'ไม่สามารถสรุปวันนัดหมายได้',
       });
     }
   });
+
 
 
   fastify.post('/:id/respond', async (request, reply) => {
@@ -1484,6 +1703,25 @@ export async function appointmentRoutes(fastify: FastifyInstance) {
 
         return created;
       });
+
+      if (appointment.notifyEnabled) {
+        try {
+          const isPoll = Boolean(isVote && pollInput.length > 0);
+
+          await notifyAppointmentMembers(
+            fastify,
+            appointment.id,
+            userId,
+            isPoll ? 'มีการเปิดโหวตนัดหมาย' : 'มีนัดหมายใหม่',
+            isPoll
+              ? `มีการเปิดโหวตสำหรับนัดหมาย "${appointment.title}" กรุณาเข้าไปเลือกตัวเลือก`
+              : `คุณได้รับเชิญเข้าร่วมนัดหมาย "${appointment.title}"`,
+            isPoll ? 'appointment_poll' : 'appointment_created',
+          );
+        } catch (error) {
+          request.log.error(error, 'Failed to notify appointment members');
+        }
+      }
 
       return reply.status(201).send({
         message: 'สร้างนัดหมายสำเร็จ',
